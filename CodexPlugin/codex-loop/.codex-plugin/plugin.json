@@ -1,0 +1,22 @@
+{
+  "name": "codex-loop",
+  "version": "1.0.1",
+  "description": "Autonomous issue-to-PR loop for OpenAI Codex: $loop-init sets up a repo (AGENTS.md rules, skills, hooks, trigger/converge/sweep GitHub Actions, labels). Label an issue codex-build and Codex implements, converges CI + reviews, and hands you a ready PR.",
+  "author": { "name": "Ronald Mannak" },
+  "license": "MIT",
+  "keywords": ["codex", "github", "automation", "ci", "swift"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Loop",
+    "shortDescription": "Turn approved GitHub issues into reviewed PRs",
+    "longDescription": "Installs an issue-to-PR loop with repository rules, verification skills, safety hooks, GitHub triggers, convergence, and recovery scaffolding.",
+    "developerName": "Ronald Mannak",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Set up the Codex issue-to-PR loop in this repo.",
+      "Turn this approved plan into a buildable issue."
+    ],
+    "brandColor": "#111827"
+  }
+}

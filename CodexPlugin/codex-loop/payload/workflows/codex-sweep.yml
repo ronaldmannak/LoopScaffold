@@ -1,0 +1,61 @@
+name: Codex queue sweep
+# Pure label mechanics — no model needed. Hourly.
+on:
+  schedule: [{ cron: "17 * * * *" }]
+  workflow_dispatch:
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, issues: write, pull-requests: write }
+    env: { GH_TOKEN: "${{ github.token }}", R: "${{ github.repository }}" }
+    steps:
+      - name: Unpark merged dependencies
+        run: |
+          OWNER=${R%%/*}
+          NAME=${R#*/}
+          for N in $(gh issue list -R "$R" --label codex-blocked --state open --json number --jq '.[].number'); do
+            DEP=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body' | grep -oE 'codex-dependency-wait #[0-9]+' | tail -1 | grep -oE '[0-9]+' || true)
+            [ -z "$DEP" ] && continue
+            STATE=$(gh issue view "$DEP" -R "$R" --json state --jq .state)
+            if [ "$STATE" = "CLOSED" ]; then
+              MERGED=$(gh api graphql \
+                -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{mergedAt}}}}}' \
+                -f owner="$OWNER" -f name="$NAME" -F number="$DEP" \
+                --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.mergedAt != null)] | length')
+              if [ "$MERGED" -gt 0 ]; then
+                gh issue comment "$N" -R "$R" --body "Dependency #$DEP was closed by a merged PR — resuming."
+                gh issue edit "$N" -R "$R" --remove-label codex-blocked --add-label codex-build
+              fi
+            fi
+          done
+      - name: Recover dead runs (one retry, then block)
+        run: |
+          for N in $(gh issue list -R "$R" --label codex-running --state open --json number --jq '.[].number'); do
+            BR=$(gh api "repos/$R/branches" --paginate --jq ".[].name" | grep "^codex/issue-$N-" | head -1 || true)
+            if [ -n "$BR" ]; then
+              LAST=$(gh api "repos/$R/commits?sha=$BR&per_page=1" --jq '.[0].commit.committer.date')
+            else
+              LAST=$(gh issue view "$N" -R "$R" --json updatedAt --jq .updatedAt)
+            fi
+            AGE=$(( ($(date +%s) - $(date -d "$LAST" +%s)) / 3600 ))
+            if [ "$AGE" -ge 2 ]; then
+              if gh issue view "$N" -R "$R" --json comments --jq '.comments[].body' | grep -q codex-dead-run-retry; then
+                gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-blocked
+                gh issue comment "$N" -R "$R" --body "Second apparent dead run; needs a human look."
+              else
+                gh issue comment "$N" -R "$R" --body "Previous run appears dead — retriggering. <!-- codex-dead-run-retry -->"
+                gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-build
+              fi
+            fi
+          done
+      - name: Send conflicted ready PRs back for rebase
+        run: |
+          for PR in $(gh pr list -R "$R" --state open --json number,headRefName --jq '.[] | select(.headRefName | startswith("codex/")) | .number'); do
+            M=$(gh pr view "$PR" -R "$R" --json mergeable --jq .mergeable)
+            N=$(gh pr view "$PR" -R "$R" --json body --jq .body | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+            [ -z "$N" ] && continue
+            if [ "$M" = "CONFLICTING" ] && gh issue view "$N" -R "$R" --json labels --jq '.labels[].name' | grep -q codex-ready; then
+              gh issue comment "$N" -R "$R" --body "Base moved; sending back for rebase + reconvergence."
+              gh issue edit "$N" -R "$R" --remove-label codex-ready --add-label codex-build
+            fi
+          done

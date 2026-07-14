@@ -1,0 +1,34 @@
+name: Codex converge trigger
+# Wakes Codex on the PR the moment there is something to act on.
+on:
+  workflow_run:
+    workflows: ["CI"]            # <-- set to your CI workflow's name (Actions CI only; Xcode Cloud repos use pull_request status polling in the sweep instead)
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+concurrency:
+  group: codex-converge-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+  cancel-in-progress: true
+jobs:
+  summon:
+    if: >
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'failure'
+        && startsWith(github.event.workflow_run.head_branch, 'codex/'))
+      || (github.event_name == 'pull_request_review'
+        && startsWith(github.event.pull_request.head.ref, 'codex/')
+        && vars.CODEX_RUNNER_LOGIN != ''
+        && github.event.review.user.login != vars.CODEX_RUNNER_LOGIN)
+    runs-on: ubuntu-latest
+    permissions: { pull-requests: write, issues: write }
+    steps:
+      - name: Summon Codex on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          R: ${{ github.repository }}
+          REASON: ${{ github.event_name }}
+        run: |
+          PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number') || exit 0
+          [ -z "$PR" ] && exit 0
+          gh pr comment "$PR" -R "$R" --body "@codex Wake reason: $REASON. Apply the \$pr-iteration skill: snapshot current head SHA and completed checks, triage all review comments, fix ONE coherent batch (use \$ci-diagnosis for failed checks), verify with .codex/scripts/checks.sh, push. If everything is green and triaged, label the linked issue codex-ready. Respect the caps in AGENTS.md."

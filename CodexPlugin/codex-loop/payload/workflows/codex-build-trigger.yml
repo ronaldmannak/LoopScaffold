@@ -1,0 +1,21 @@
+name: Codex build trigger
+on:
+  issues:
+    types: [labeled]
+concurrency:
+  group: codex-build-${{ github.event.issue.number }}
+jobs:
+  dispatch:
+    if: github.event.label.name == 'codex-build'
+    runs-on: ubuntu-latest
+    permissions: { issues: write }
+    steps:
+      - name: Claim and summon Codex
+        env: { GH_TOKEN: "${{ github.token }}", N: "${{ github.event.issue.number }}", R: "${{ github.repository }}" }
+        run: |
+          gh issue edit "$N" -R "$R" --remove-label codex-build --add-label codex-running
+          if ! gh issue comment "$N" -R "$R" --body "@codex Implement this issue. It is the complete spec. Follow the repo's AGENTS.md loop rules and the \$pr-iteration, \$verification, and \$code-review skills. Branch codex/issue-$N-<slug>; open a READY-for-review PR 'Closes #$N'; converge CI and reviews; end with this issue labeled codex-ready, or codex-blocked with a diagnosis comment. Never merge; never push to main."; then
+            gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-blocked || true
+            echo "::error::Codex summon comment failed; issue moved from codex-running to codex-blocked"
+            exit 1
+          fi

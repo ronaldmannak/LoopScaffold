@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "bash .codex/scripts/protect-files.sh" }] },
+      { "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "bash .codex/scripts/guard-bash.sh" }] }
+    ]
+  }
+}

@@ -3,7 +3,7 @@
 # Skills, routines, and CI all call THIS script so verification can't drift.
 #
 # Usage: checks.sh [--quick] [--clean]   (--quick = build only; --clean = tool-native clean first)
-# Output: one summary line per step; full logs in .claude/.checks/.
+# Output: one summary line per step; full logs in .codex/.checks/.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -15,7 +15,7 @@ for a in "$@"; do
     *) echo "checks.sh: unknown option: $a" >&2; exit 2 ;;
   esac
 done
-LOG_DIR=".claude/.checks"; mkdir -p "$LOG_DIR"
+LOG_DIR=".codex/.checks"; mkdir -p "$LOG_DIR"
 [[ -f "$LOG_DIR/.gitignore" ]] || echo "*" > "$LOG_DIR/.gitignore"   # never commit logs
 STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
 

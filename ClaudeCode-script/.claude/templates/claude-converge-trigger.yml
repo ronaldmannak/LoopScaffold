@@ -1,32 +1,28 @@
 name: Trigger Claude converge routine
-# Fires the CONVERGER routine (Routine B) the moment there is something to
-# act on for a claude/ branch PR — no polling, no sleeps, CI can take as
-# long as it takes.
-#
+# Optional split-loop bridge for CI that outlives a single routine session.
 # Setup:
 #   1. Create Routine B with an API trigger; add repo secrets
 #      CLAUDE_CONVERGE_FIRE_URL and CLAUDE_CONVERGE_TOKEN.
 #   2. Replace "CI" below with your CI workflow's `name:`.
 on:
   workflow_run:
-    workflows: ["CI"]            # <-- your CI workflow name
+    workflows: ["CI"]
     types: [completed]
   pull_request_review:
     types: [submitted]
 
 concurrency:
   group: claude-converge-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
-  cancel-in-progress: true       # newest event wins; stale wake-ups are pointless
+  cancel-in-progress: true
 
 jobs:
   fire:
-    # Only claude/ branches, and never react to reviews authored by the account
-    # the routine runs as (set CLAUDE_RUNNER_LOGIN repo variable) — prevents loops.
     if: >
       (github.event_name == 'workflow_run'
         && startsWith(github.event.workflow_run.head_branch, 'claude/'))
       || (github.event_name == 'pull_request_review'
         && startsWith(github.event.pull_request.head.ref, 'claude/')
+        && vars.CLAUDE_RUNNER_LOGIN != ''
         && github.event.review.user.login != vars.CLAUDE_RUNNER_LOGIN)
     runs-on: ubuntu-latest
     steps:

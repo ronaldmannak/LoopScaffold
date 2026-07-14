@@ -23,11 +23,11 @@ issue). For repos whose CI outlives comfortable session lifetimes, the
 event-driven split (Routine A + API-woken converger B via
 claude-converge-trigger.yml) remains available.
 
-```
+```text
 .github/workflows/
 └── claude-converge-trigger.yml    # CI completion / review submitted → wakes Routine B
 .claude/
-├── settings.json                  # PreToolUse guard only
+├── settings.json                  # two loop-owned PreToolUse guards; merged on install
 ├── rules/
 │   ├── simplicity.md              # concrete-by-default; abstractions need justification
 │   ├── testing.md                 # tests welcome; weakening blocked; test diffs called out
@@ -41,7 +41,8 @@ claude-converge-trigger.yml) remains available.
 │   ├── ci-diagnostician.md        # digests failed CI runs into a 250-word verdict
 │   └── prior-art-researcher.md    # read-only + web
 ├── templates/
-│   └── ci-github-actions.yml      # inert CI template — copy in only if you choose Actions
+│   ├── ci-github-actions.yml      # inert CI template — copy in only if you choose Actions
+│   └── claude-converge-trigger.yml # optional slow-CI split-loop bridge
 ├── scripts/
 │   ├── checks.sh                  # build/test/lint, timeouts, summary + logs
 │   ├── protect-files.sh           # tripwire: policy files + obvious test weakening
@@ -54,11 +55,13 @@ claude-converge-trigger.yml) remains available.
 
 Quickstart — from the unzipped scaffold directory:
 ```bash
-./install.sh /path/to/repo [--with-actions-ci] [--protect-main]
+./install.sh /path/to/repo [--with-actions-ci] [--with-converger]
 ```
 Idempotent: run it again after scaffold updates; it refreshes everything
-EXCEPT your customized checks.sh. It also creates the labels (if gh is
-authed) and prints the remaining manual steps. Manual equivalent:
+EXCEPT your customized checks.sh. Existing settings are merged field-by-field:
+unrelated keys and hooks remain intact, and invalid JSON is left untouched.
+It also creates the labels (if gh is authed) and prints the remaining manual
+steps. It never changes branch protection or rulesets. Manual equivalent:
 
 1. Copy `.claude/` into the repo; commit.
 2. `chmod +x .claude/scripts/*.sh`; configure the BUILD/TEST/LINT arrays in `checks.sh`
@@ -110,7 +113,7 @@ authed) and prints the remaining manual steps. Manual equivalent:
 
 ## The kickoff prompt (interactive session)
 
-```
+```text
 Plan, don't build: <one-paragraph feature description>.
 
 Use plan mode. Before drafting, dispatch the prior-art-researcher agent
@@ -123,7 +126,7 @@ implement anything in this session.
 
 ## The routine prompt (paste at claude.ai/code/routines)
 
-```
+```text
 /goal The triggering issue reaches exactly one terminal state before this
 session ends: (a) claude-ready with branch, pasted checks.sh evidence,
 reviewer PASS, ready PR "Closes #<n>" green for its current head, comments
@@ -212,7 +215,7 @@ HARD RULES (restating .claude/rules/, non-negotiable):
 
 ## OPTIONAL Routine B — converger for slow-CI repos (API trigger)
 
-```
+```text
 You were woken because something happened on a claude/ branch PR — the
 trigger text names the branch and wake reason. You get a FRESH session per
 event; nothing persists between wake-ups, so derive everything from
@@ -260,7 +263,7 @@ per the verification skill in every PR update.
   protection plus the hook-blocked `gh pr merge`. Don't merge a PR whose
   issue isn't `claude-ready`.
 - **Permissions vs sandbox:** independent layers. The broad allow
-  (Bash/Edit/Write) lives in ~/.claude/settings.json INSIDE the VM, written
+  (Bash/Edit/Write) lives in ~/.claude/settings.json INSIDE the VM, merged
   by the environment setup script — so unattended runs never stall on an
   approval prompt, while your LOCAL sessions keep prompting (the committed
   repo settings contain only the deny-hooks). Defense stays on the deny
