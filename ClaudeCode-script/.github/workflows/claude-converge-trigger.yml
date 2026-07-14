@@ -1,0 +1,47 @@
+name: Trigger Claude converge routine
+# Fires the CONVERGER routine (Routine B) the moment there is something to
+# act on for a claude/ branch PR — no polling, no sleeps, CI can take as
+# long as it takes.
+#
+# Setup:
+#   1. Create Routine B with an API trigger; add repo secrets
+#      CLAUDE_CONVERGE_FIRE_URL and CLAUDE_CONVERGE_TOKEN.
+#   2. Replace "CI" below with your CI workflow's `name:`.
+on:
+  workflow_run:
+    workflows: ["CI"]            # <-- your CI workflow name
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: claude-converge-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+  cancel-in-progress: true       # newest event wins; stale wake-ups are pointless
+
+jobs:
+  fire:
+    # Only claude/ branches, and never react to reviews authored by the account
+    # the routine runs as (set CLAUDE_RUNNER_LOGIN repo variable) — prevents loops.
+    if: >
+      (github.event_name == 'workflow_run'
+        && startsWith(github.event.workflow_run.head_branch, 'claude/'))
+      || (github.event_name == 'pull_request_review'
+        && startsWith(github.event.pull_request.head.ref, 'claude/')
+        && github.event.review.user.login != vars.CLAUDE_RUNNER_LOGIN)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire converger
+        env:
+          ROUTINE_URL: ${{ secrets.CLAUDE_CONVERGE_FIRE_URL }}
+          ROUTINE_TOKEN: ${{ secrets.CLAUDE_CONVERGE_TOKEN }}
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          REASON: ${{ github.event_name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion || 'review-submitted' }}
+        run: |
+          jq -n --arg text "Converge PR for branch $BRANCH in ${{ github.repository }}. Wake reason: $REASON ($CONCLUSION)." '{text:$text}' \
+          | curl -sS --fail-with-body -X POST "$ROUTINE_URL" \
+              -H "Authorization: Bearer $ROUTINE_TOKEN" \
+              -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "Content-Type: application/json" \
+              -d @-
