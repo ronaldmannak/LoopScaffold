@@ -13,18 +13,39 @@ jobs:
         run: |
           OWNER=${R%%/*}
           NAME=${R#*/}
-          for N in $(gh issue list -R "$R" --label codex-blocked --state open --json number --jq '.[].number'); do
-            DEP=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body' | grep -oE 'codex-dependency-wait #[0-9]+' | tail -1 | grep -oE '[0-9]+' || true)
-            [ -z "$DEP" ] && continue
-            STATE=$(gh issue view "$DEP" -R "$R" --json state --jq .state)
+          if ! ISSUES=$(gh issue list -R "$R" --label codex-blocked --state open --json number --jq '.[].number'); then
+            echo "::error::Could not list blocked issues"
+            exit 1
+          fi
+          for N in $ISSUES; do
+            if ! COMMENTS=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body'); then
+              echo "::warning::Could not inspect dependency markers for issue #$N"
+              continue
+            fi
+            WAIT_MARKER=$(printf '%s\n' "$COMMENTS" | grep -noE 'codex-dependency-wait #[0-9]+' | tail -1 || true)
+            [ -z "$WAIT_MARKER" ] && continue
+            WAIT_LINE=${WAIT_MARKER%%:*}
+            DEP=${WAIT_MARKER##*#}
+            RESUMED_LINE=$(printf '%s\n' "$COMMENTS" | grep -nF "codex-dependency-resumed #$DEP" | tail -1 | cut -d: -f1 || true)
+            if [ -n "$RESUMED_LINE" ] && [ "$RESUMED_LINE" -gt "$WAIT_LINE" ]; then
+              continue
+            fi
+            if ! STATE=$(gh issue view "$DEP" -R "$R" --json state --jq .state); then
+              echo "::warning::Could not inspect dependency #$DEP for issue #$N"
+              continue
+            fi
             if [ "$STATE" = "CLOSED" ]; then
-              MERGED=$(gh api graphql \
+              if ! MERGED=$(gh api graphql \
                 -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{mergedAt}}}}}' \
                 -f owner="$OWNER" -f name="$NAME" -F number="$DEP" \
-                --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.mergedAt != null)] | length')
+                --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.mergedAt != null)] | length'); then
+                echo "::warning::Could not inspect merged PRs for dependency #$DEP"
+                continue
+              fi
               if [ "$MERGED" -gt 0 ]; then
-                if gh workflow run codex-build-trigger.yml -R "$R" -f issue_number="$N"; then
-                  gh issue comment "$N" -R "$R" --body "Dependency #$DEP was closed by a merged PR — resuming via workflow dispatch."
+                if gh workflow run codex-build-trigger.yml -R "$R" \
+                  -f issue_number="$N" -f expected_label=codex-blocked; then
+                  gh issue comment "$N" -R "$R" --body "Dependency #$DEP was closed by a merged PR — resuming via workflow dispatch. <!-- codex-dependency-resumed #$DEP -->"
                 else
                   echo "::error::Could not dispatch issue #$N; leaving it blocked for the next sweep"
                   exit 1
@@ -38,55 +59,105 @@ jobs:
             local timestamp="$1"
             local epoch
             [ -z "$timestamp" ] && return
-            epoch=$(date -d "$timestamp" +%s)
+            if ! epoch=$(date -d "$timestamp" +%s); then
+              echo "::warning::Could not parse activity timestamp: $timestamp"
+              return 1
+            fi
             if [ "$epoch" -gt "$LAST_ACTIVITY_EPOCH" ]; then
               LAST_ACTIVITY_EPOCH=$epoch
             fi
           }
 
-          for N in $(gh issue list -R "$R" --label codex-running --state open --json number --jq '.[].number'); do
-            STATE_LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name')
+          if ! ISSUES=$(gh issue list -R "$R" --label codex-running --state open --json number --jq '.[].number'); then
+            echo "::error::Could not list running issues"
+            exit 1
+          fi
+          for N in $ISSUES; do
+            if ! STATE_LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
+              echo "::warning::Could not inspect state labels for issue #$N"
+              continue
+            fi
             if printf '%s\n' "$STATE_LABELS" | grep -Eq '^codex-(ready|blocked)$'; then
               gh issue edit "$N" -R "$R" --remove-label codex-running
               continue
             fi
 
-            ISSUE_UPDATED=$(gh issue view "$N" -R "$R" --json updatedAt --jq .updatedAt)
-            LAST_ACTIVITY_EPOCH=$(date -d "$ISSUE_UPDATED" +%s)
-            BR=$(gh api "repos/$R/branches" --paginate --jq ".[].name" | grep "^codex/issue-$N-" | head -1 || true)
+            if ! ISSUE_UPDATED=$(gh issue view "$N" -R "$R" --json updatedAt --jq .updatedAt); then
+              echo "::warning::Could not inspect activity for issue #$N"
+              continue
+            fi
+            if ! LAST_ACTIVITY_EPOCH=$(date -d "$ISSUE_UPDATED" +%s); then
+              echo "::warning::Could not parse update time for issue #$N"
+              continue
+            fi
+            if ! BRANCHES=$(gh api "repos/$R/branches" --paginate --jq ".[].name"); then
+              echo "::warning::Could not list branches while checking issue #$N"
+              continue
+            fi
+            BR=$(printf '%s\n' "$BRANCHES" | grep "^codex/issue-$N-" | head -1 || true)
             if [ -n "$BR" ]; then
-              HEAD_SHA=$(gh api "repos/$R/commits?sha=$BR&per_page=1" --jq '.[0].sha')
-              COMMIT_UPDATED=$(gh api "repos/$R/commits?sha=$BR&per_page=1" --jq '.[0].commit.committer.date')
-              record_activity "$COMMIT_UPDATED"
+              if ! COMMIT=$(gh api "repos/$R/commits?sha=$BR&per_page=1"); then
+                echo "::warning::Could not inspect branch $BR"
+                continue
+              fi
+              if ! HEAD_SHA=$(printf '%s' "$COMMIT" | jq -er '.[0].sha') || \
+                 ! COMMIT_UPDATED=$(printf '%s' "$COMMIT" | jq -er '.[0].commit.committer.date'); then
+                echo "::warning::Malformed commit response for branch $BR"
+                continue
+              fi
+              record_activity "$COMMIT_UPDATED" || continue
 
-              PR_NUMBER=$(gh pr list -R "$R" --head "$BR" --state open --json number --jq '.[0].number // ""')
+              if ! PR_NUMBER=$(gh pr list -R "$R" --head "$BR" --state open --json number --jq '.[0].number // ""'); then
+                echo "::warning::Could not inspect the PR for branch $BR"
+                continue
+              fi
               if [ -n "$PR_NUMBER" ]; then
-                PR_ACTIVITY=$(gh pr view "$PR_NUMBER" -R "$R" --json comments,reviews,updatedAt --jq '[.updatedAt, (.comments[]?.updatedAt), (.reviews[]?.submittedAt)] | map(select(. != null)) | max // ""')
-                record_activity "$PR_ACTIVITY"
+                if ! PR_ACTIVITY=$(gh pr view "$PR_NUMBER" -R "$R" --json comments,reviews,updatedAt --jq '[.updatedAt, (.comments[]?.updatedAt), (.reviews[]?.submittedAt)] | map(select(. != null)) | max // ""'); then
+                  echo "::warning::Could not inspect activity for PR #$PR_NUMBER"
+                  continue
+                fi
+                record_activity "$PR_ACTIVITY" || continue
               fi
 
-              CHECK_RUNS=$(gh api "repos/$R/commits/$HEAD_SHA/check-runs?per_page=100")
+              if ! CHECK_RUNS=$(gh api "repos/$R/commits/$HEAD_SHA/check-runs?per_page=100"); then
+                echo "::warning::Could not inspect checks for $HEAD_SHA"
+                continue
+              fi
               if printf '%s' "$CHECK_RUNS" | jq -e '.check_runs[]? | select(.status != "completed")' >/dev/null; then
                 continue
               fi
-              CHECK_UPDATED=$(printf '%s' "$CHECK_RUNS" | jq -r '[.check_runs[]?.completed_at | select(. != null)] | max // ""')
-              record_activity "$CHECK_UPDATED"
+              if ! CHECK_UPDATED=$(printf '%s' "$CHECK_RUNS" | jq -er '[.check_runs[]?.completed_at | select(. != null)] | max // ""'); then
+                echo "::warning::Malformed check response for $HEAD_SHA"
+                continue
+              fi
+              record_activity "$CHECK_UPDATED" || continue
 
-              COMMIT_STATUS=$(gh api "repos/$R/commits/$HEAD_SHA/status")
+              if ! COMMIT_STATUS=$(gh api "repos/$R/commits/$HEAD_SHA/status"); then
+                echo "::warning::Could not inspect commit statuses for $HEAD_SHA"
+                continue
+              fi
               if printf '%s' "$COMMIT_STATUS" | jq -e '.statuses[]? | select(.state == "pending")' >/dev/null; then
                 continue
               fi
-              STATUS_UPDATED=$(printf '%s' "$COMMIT_STATUS" | jq -r '[.statuses[]?.updated_at | select(. != null)] | max // ""')
-              record_activity "$STATUS_UPDATED"
+              if ! STATUS_UPDATED=$(printf '%s' "$COMMIT_STATUS" | jq -er '[.statuses[]?.updated_at | select(. != null)] | max // ""'); then
+                echo "::warning::Malformed status response for $HEAD_SHA"
+                continue
+              fi
+              record_activity "$STATUS_UPDATED" || continue
             fi
 
             AGE=$(( ($(date +%s) - LAST_ACTIVITY_EPOCH) / 3600 ))
             if [ "$AGE" -ge 2 ]; then
-              if gh issue view "$N" -R "$R" --json comments --jq '.comments[].body' | grep -q codex-dead-run-retry; then
+              if ! COMMENTS=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body'); then
+                echo "::warning::Could not inspect retry history for issue #$N"
+                continue
+              fi
+              if printf '%s\n' "$COMMENTS" | grep -q codex-dead-run-retry; then
                 gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-blocked
                 gh issue comment "$N" -R "$R" --body "Second apparent dead run; needs a human look."
               else
-                if gh workflow run codex-build-trigger.yml -R "$R" -f issue_number="$N"; then
+                if gh workflow run codex-build-trigger.yml -R "$R" \
+                  -f issue_number="$N" -f expected_label=codex-running; then
                   gh issue comment "$N" -R "$R" --body "Previous run appears dead — retriggering via workflow dispatch. <!-- codex-dead-run-retry -->"
                 else
                   echo "::error::Could not redispatch issue #$N; leaving it running for the next sweep"
@@ -97,12 +168,28 @@ jobs:
           done
       - name: Send conflicted ready PRs back for rebase
         run: |
-          for PR in $(gh pr list -R "$R" --state open --json number,headRefName --jq '.[] | select(.headRefName | startswith("codex/")) | .number'); do
-            M=$(gh pr view "$PR" -R "$R" --json mergeable --jq .mergeable)
-            N=$(gh pr view "$PR" -R "$R" --json body --jq .body | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+          if ! PRS=$(gh pr list -R "$R" --state open --json number,headRefName --jq '.[] | select(.headRefName | startswith("codex/")) | .number'); then
+            echo "::error::Could not list Codex pull requests"
+            exit 1
+          fi
+          for PR in $PRS; do
+            if ! M=$(gh pr view "$PR" -R "$R" --json mergeable --jq .mergeable); then
+              echo "::warning::Could not inspect mergeability for PR #$PR"
+              continue
+            fi
+            if ! BODY=$(gh pr view "$PR" -R "$R" --json body --jq '.body // ""'); then
+              echo "::warning::Could not inspect body for PR #$PR"
+              continue
+            fi
+            N=$(printf '%s\n' "$BODY" | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
             [ -z "$N" ] && continue
-            if [ "$M" = "CONFLICTING" ] && gh issue view "$N" -R "$R" --json labels --jq '.labels[].name' | grep -q codex-ready; then
-              if gh workflow run codex-build-trigger.yml -R "$R" -f issue_number="$N"; then
+            if ! LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
+              echo "::warning::Could not inspect linked issue #$N for PR #$PR"
+              continue
+            fi
+            if [ "$M" = "CONFLICTING" ] && printf '%s\n' "$LABELS" | grep -Fxq codex-ready; then
+              if gh workflow run codex-build-trigger.yml -R "$R" \
+                -f issue_number="$N" -f expected_label=codex-ready; then
                 gh issue comment "$N" -R "$R" --body "Base moved; sending back for rebase + reconvergence via workflow dispatch."
               else
                 echo "::error::Could not redispatch conflicted issue #$N; leaving it ready for the next sweep"

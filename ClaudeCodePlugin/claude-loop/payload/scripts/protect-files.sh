@@ -1,49 +1,89 @@
 #!/usr/bin/env bash
 # PreToolUse hook (Edit|Write|MultiEdit). Exit 2 = block; stderr goes to Claude.
-#
-# Policy:
-#   HARD BLOCK: .claude policy files, CI workflow definitions.
-#   TESTS: creating/editing tests is ALLOWED (testing.md requires new tests
-#          for behavior changes). This is a TRIPWIRE, not proof of test
-#          integrity: it blocks common obvious weakening patterns
-#          (skip/disable markers, assertion removal in the edited region).
-#          Semantic test-integrity review by the code-reviewer against the
-#          issue's acceptance criteria remains MANDATORY.
-#          False positives (e.g. moving an assertion into a helper) are
-#          resolved by a human committing that change manually.
 set -u
-HOOK_INPUT="$(cat)" python3 << 'PY'
-import json, os, re, sys
 
-d = json.loads(os.environ["HOOK_INPUT"])
-ti = d.get("tool_input", {}) or {}
-path = ti.get("file_path", "") or ""
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "BLOCKED: policy hook requires python3 and cannot safely inspect this edit." >&2
+  exit 2
+fi
+
+HOOK_INPUT="$(cat)"
+HOOK_INPUT="$HOOK_INPUT" python3 <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+try:
+    data = json.loads(os.environ["HOOK_INPUT"])
+except (KeyError, json.JSONDecodeError) as error:
+    sys.stderr.write(f"BLOCKED: invalid policy-hook input: {error}\n")
+    sys.exit(2)
+
+tool_input = data.get("tool_input", {}) or {}
+path = tool_input.get("file_path", "") or ""
 if not path:
     sys.exit(0)
 
-if re.search(r'(^|/)\.claude/(settings\.json|rules/|scripts/)|(^|/)\.github/workflows/', path):
-    sys.stderr.write(f"BLOCKED: '{path}' is a policy/CI file. Changes here require a human.\n")
+normalized_path = path.replace("\\", "/")
+if re.search(r"(^|/)\.claude/|(^|/)\.github/workflows/", normalized_path):
+    sys.stderr.write(
+        f"BLOCKED: '{path}' is a policy/CI file. Changes here require a human.\n"
+    )
     sys.exit(2)
 
-if not re.search(r'(^|/)Tests?/|[^/]*Tests/|Tests?\.swift$|\.test\.[jt]sx?$|_test\.(py|go)$|\.xctestplan$', path):
+test_path = re.compile(
+    r"(^|/)(tests?|__tests__)(/|$)"
+    r"|(^|/)(test_[^/]+|[^/]+_(test|tests))\.(py|go)$"
+    r"|(^|/)[^/]+\.(test|spec)\.[jt]sx?$"
+    r"|(^|/)(test[^/]*|[^/]+tests)\.swift$"
+    r"|\.xctestplan$",
+    re.IGNORECASE,
+)
+if not test_path.search(normalized_path):
     sys.exit(0)
 
-edits = ti.get("edits") or [{
-    "old_string": ti.get("old_str") or ti.get("old_string") or "",
-    "new_string": ti.get("new_str") or ti.get("new_string") or ti.get("content", ""),
+edits = tool_input.get("edits") or [{
+    "old_string": tool_input.get("old_str") or tool_input.get("old_string") or "",
+    "new_string": tool_input.get("new_str") or tool_input.get("new_string") or tool_input.get("content", ""),
 }]
-SKIP   = re.compile(r'XCTSkip|\bxit\s*\(|\bxdescribe\s*\(|\.skip\s*\(|@Disabled|@Ignore\b|it\.todo|continue-on-error')
-ASSERT = re.compile(r'XCTAssert|#expect|XCTFail|\bexpect\s*\(|\bassert')
 
-for e in edits:
-    old, new = e.get("old_string", ""), e.get("new_string", "")
-    if SKIP.search(new) and not SKIP.search(old):
-        sys.stderr.write("BLOCKED: this edit introduces a skip/disable marker into a test file.\n"
-                         "Per .claude/rules/testing.md: fix the implementation; if the test is wrong, comment for a human.\n")
+# Write supplies the complete new file but no old_string. Read the existing test
+# before the tool runs so whole-file rewrites cannot bypass assertion removal.
+if "content" in tool_input and edits[0].get("old_string", "") == "":
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())) / candidate
+    if candidate.exists():
+        edits[0]["old_string"] = candidate.read_text(encoding="utf-8")
+
+skip_pattern = re.compile(
+    r"XCTSkip|\bxit\s*\(|\bxdescribe\s*\(|\.skip\s*\(|@Disabled|@Ignore\b|it\.todo|continue-on-error"
+)
+assert_pattern = re.compile(r"XCTAssert|#expect|XCTFail|\bexpect\s*\(|\bassert\b")
+
+for edit in edits:
+    old = edit.get("old_string", "") or ""
+    new = edit.get("new_string", "") or ""
+    if skip_pattern.search(new) and not skip_pattern.search(old):
+        sys.stderr.write(
+            "BLOCKED: this edit introduces a skip/disable marker into a test file.\n"
+            "Fix the implementation; if the test is wrong, leave it for a human.\n"
+        )
         sys.exit(2)
-    if old and ASSERT.search(old) and not ASSERT.search(new):
-        sys.stderr.write("BLOCKED: this edit removes assertions from a test without replacing them.\n"
-                         "Weakening tests to get green is not allowed. Flag the test in a PR comment instead.\n")
+    if assert_pattern.search(old) and not assert_pattern.search(new):
+        sys.stderr.write(
+            "BLOCKED: this edit removes assertions from a test without replacing them.\n"
+            "Weakening tests to get green is not allowed.\n"
+        )
         sys.exit(2)
 sys.exit(0)
 PY
+status=$?
+if [[ $status -ne 0 ]]; then
+  if [[ $status -ne 2 ]]; then
+    echo "BLOCKED: policy hook failed unexpectedly; refusing to fail open." >&2
+  fi
+  exit 2
+fi

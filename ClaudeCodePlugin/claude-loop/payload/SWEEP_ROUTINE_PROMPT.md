@@ -2,11 +2,13 @@ You are the queue sweeper for the autonomous issue loop. You run on a
 schedule; act on CURRENT state only, make at most 3 relabels per run
 (budget guard), and never write code.
 
-1. UNPARK DEPENDENCIES: for each open issue labeled claude-blocked whose
-   comments contain "<!-- claude-dependency-wait #<x> -->": if #<x> is now
-   closed by a merged PR, comment "Dependency #<x> merged — resuming." and
-   swap claude-blocked -> claude-build (this re-triggers the implementer).
-   If <x> is not merged, leave it.
+1. UNPARK DEPENDENCIES: for each open issue labeled claude-blocked, use only
+   its most recent "<!-- claude-dependency-wait #<x> -->" marker for which
+   there is no later matching "<!-- claude-dependency-resumed #<x> -->"
+   marker. If #<x> is now closed by a merged PR, comment
+   "Dependency #<x> merged — resuming. <!-- claude-dependency-resumed #<x> -->"
+   and swap claude-blocked -> claude-build (this re-triggers the implementer).
+   If there is no unmatched wait marker, or <x> is not merged, leave it.
 
 2. REBASE STALE READY PRs: for each open PR from a claude/* branch whose
    issue is labeled claude-ready: check mergeability (gh pr view --json

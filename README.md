@@ -23,11 +23,11 @@ Run the complete local check before publishing an artifact:
 scripts/test-scaffolds.sh
 ```
 
-The command checks shell and JSON syntax, checks YAML syntax when PyYAML is
-available, runs clean-room installer/merge tests, validates the Codex plugin
-and skills when their validators and PyYAML are available, validates the Claude plugin
-when the Claude CLI is installed, rebuilds both archives deterministically,
-and checks ZIP integrity.
+The command is read-only: it checks shell and JSON syntax, checks YAML syntax
+when PyYAML is available, runs clean-room installer/merge tests, validates the
+Codex plugin and skills when their validators and PyYAML are available,
+validates the Claude plugin when the Claude CLI is installed, verifies both
+archives match their source trees byte-for-byte, and checks ZIP integrity.
 
 To rebuild the archives without running the full suite:
 

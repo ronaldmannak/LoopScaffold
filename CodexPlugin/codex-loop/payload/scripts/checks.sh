@@ -2,7 +2,7 @@
 # Single source of truth for "does this project pass".
 # Skills, routines, and CI all call THIS script so verification can't drift.
 #
-# Usage: checks.sh [--quick] [--clean]   (--quick = build only; --clean = tool-native clean first)
+# Usage: checks.sh [--quick] [--clean]   (--quick = build, or first configured check when no build; --clean = tool-native clean first)
 # Output: one summary line per step; full logs in .codex/.checks/.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -34,13 +34,24 @@ if [[ ${#BUILD[@]} -eq 0 ]]; then
     echo "checks.sh: Xcode project detected — configure BUILD/TEST arrays in this script." >&2
     exit 1
   elif [[ -f package.json ]]; then
-    if python3 -c "import json,sys; sys.exit(0 if 'build' in json.load(open('package.json')).get('scripts',{}) else 1)" 2>/dev/null; then
+    if ! command -v node >/dev/null 2>&1; then
+      echo "checks.sh: package.json detected but node is unavailable." >&2
+      exit 1
+    fi
+    if ! node -e "const p=JSON.parse(require('fs').readFileSync('package.json','utf8')); if (p.scripts != null && (typeof p.scripts !== 'object' || Array.isArray(p.scripts))) process.exit(1)" >/dev/null 2>&1; then
+      echo "checks.sh: package.json is invalid or its scripts value is not an object." >&2
+      exit 1
+    fi
+    has_npm_script() {
+      node -e "const p=JSON.parse(require('fs').readFileSync('package.json','utf8')); process.exit(Object.prototype.hasOwnProperty.call(p.scripts || {}, process.argv[1]) ? 0 : 1)" "$1"
+    }
+    if has_npm_script build; then
       BUILD=(npm run build)
     fi
-    if python3 -c "import json,sys; sys.exit(0 if 'test' in json.load(open('package.json')).get('scripts',{}) else 1)" 2>/dev/null; then
+    if has_npm_script test; then
       TEST=(env CI=true npm test)      # CI=true prevents watch mode
     fi
-    if python3 -c "import json,sys; sys.exit(0 if 'lint' in json.load(open('package.json')).get('scripts',{}) else 1)" 2>/dev/null; then
+    if has_npm_script lint; then
       LINT=(npm run lint)
     fi
   else

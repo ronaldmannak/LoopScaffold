@@ -32,7 +32,7 @@ import tempfile
 
 path = Path(sys.argv[1])
 try:
-    settings = json.loads(path.read_text()) if path.exists() else {}
+    settings = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 except json.JSONDecodeError as error:
     raise SystemExit(f"Refusing to replace invalid {path}: {error}")
 if not isinstance(settings, dict):
@@ -48,7 +48,7 @@ for permission in ("Bash", "Edit", "Write", "MultiEdit"):
         allowed.append(permission)
 fd, temporary = tempfile.mkstemp(prefix=".settings.", dir=path.parent)
 try:
-    with os.fdopen(fd, "w") as stream:
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
         json.dump(settings, stream, indent=2)
         stream.write("\n")
     os.replace(temporary, path)

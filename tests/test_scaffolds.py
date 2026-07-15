@@ -12,6 +12,16 @@ ROOT = Path(__file__).resolve().parents[1]
 CLAUDE_HELPER = ROOT / "ClaudeCode-script/.claude/scripts/merge-settings.py"
 PLUGIN_HELPER = ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/merge-settings.py"
 CODEX_HELPER = ROOT / "CodexPlugin/codex-loop/payload/scripts/merge-hooks.py"
+PROTECT_HOOKS = (
+    ("claude-standalone", ROOT / "ClaudeCode-script/.claude/scripts/protect-files.sh"),
+    ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/protect-files.sh"),
+    ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/protect-files.sh"),
+)
+GUARD_HOOKS = (
+    ("claude-standalone", ROOT / "ClaudeCode-script/.claude/scripts/guard-bash.sh"),
+    ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/guard-bash.sh"),
+    ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/guard-bash.sh"),
+)
 
 
 def run(*arguments: str | Path, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -22,6 +32,24 @@ def run(*arguments: str | Path, cwd: Path | None = None, env: dict[str, str] | N
         text=True,
         capture_output=True,
         check=True,
+    )
+
+
+def invoke_hook(
+    hook: Path,
+    payload: object | str,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    hook_input = payload if isinstance(payload, str) else json.dumps(payload)
+    return subprocess.run(
+        ["/bin/bash", str(hook)],
+        input=hook_input,
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
     )
 
 
@@ -122,6 +150,9 @@ class ChecksScriptTests(unittest.TestCase):
                 npm = binary / "npm"
                 npm.write_text("#!/usr/bin/env bash\nexit 0\n")
                 npm.chmod(0o755)
+                python = binary / "python3"
+                python.write_text("#!/usr/bin/env bash\nexit 99\n")
+                python.chmod(0o755)
                 env = dict(os.environ)
                 env["PATH"] = f"{binary}:{env['PATH']}"
                 quick = run("/bin/bash", source, "--quick", cwd=repo, env=env)
@@ -130,6 +161,73 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertIn("build: SKIPPED", full.stdout)
                 self.assertIn("test: PASS", full.stdout)
                 self.assertTrue((repo / log_directory).is_dir())
+
+
+class PolicyHookTests(unittest.TestCase):
+    def test_protect_hooks_fail_closed_on_malformed_input(self) -> None:
+        for product, hook in PROTECT_HOOKS + GUARD_HOOKS:
+            with self.subTest(product=product):
+                result = invoke_hook(hook, "{invalid")
+                self.assertEqual(2, result.returncode)
+                self.assertIn("BLOCKED", result.stderr)
+
+    def test_hooks_fail_closed_without_python(self) -> None:
+        env = dict(os.environ)
+        env["PATH"] = ""
+        for product, hook in PROTECT_HOOKS + GUARD_HOOKS:
+            with self.subTest(product=product):
+                result = invoke_hook(hook, {}, env=env)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("requires python3", result.stderr)
+
+    def test_entire_policy_trees_are_protected(self) -> None:
+        cases = (
+            (PROTECT_HOOKS[0], ".claude/agents/reviewer.md"),
+            (PROTECT_HOOKS[1], ".claude/skills/verification/SKILL.md"),
+            (PROTECT_HOOKS[2], ".agents/skills/verification/SKILL.md"),
+        )
+        for (product, hook), path in cases:
+            with self.subTest(product=product):
+                result = invoke_hook(hook, {"tool_input": {"file_path": path, "new_string": "x"}})
+                self.assertEqual(2, result.returncode)
+
+    def test_lowercase_tests_and_whole_file_writes_cannot_remove_assertions(self) -> None:
+        for product, hook in PROTECT_HOOKS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                test = repo / "tests/test_feature.py"
+                test.parent.mkdir()
+                test.write_text("def test_feature():\n    assert feature()\n", encoding="utf-8")
+                env = dict(os.environ)
+                env["CLAUDE_PROJECT_DIR"] = str(repo)
+                result = invoke_hook(
+                    hook,
+                    {"tool_input": {"file_path": "tests/test_feature.py", "content": "def test_feature():\n    pass\n"}},
+                    cwd=repo,
+                    env=env,
+                )
+                self.assertEqual(2, result.returncode)
+                self.assertIn("removes assertions", result.stderr)
+
+    def test_bash_guards_cover_git_options_refspecs_and_test_deletions(self) -> None:
+        blocked = (
+            "git -C elsewhere push --force origin main",
+            "git push origin +main",
+            "git push origin feature:main",
+            "git push origin HEAD:refs/heads/master",
+            "gh --repo owner/repo pr merge 42",
+            "rm -rf Tests",
+            "rm -rf tests/",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, command=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+            safe = invoke_hook(hook, {"tool_input": {"command": "git push origin main-thread-fix"}})
+            self.assertEqual(0, safe.returncode)
+            non_test = invoke_hook(hook, {"tool_input": {"command": "rm Sources/Contest.swift"}})
+            self.assertEqual(0, non_test.returncode)
 
 
 class CloudSetupTests(unittest.TestCase):
@@ -166,13 +264,27 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("types: [completed]", workflow)
         self.assertNotIn("conclusion == 'failure'", workflow)
 
+    def test_codex_uses_the_supported_action_for_build_and_convergence(self) -> None:
+        trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        self.assertIn("uses: openai/codex-action@v1", trigger)
+        self.assertIn("openai-api-key: ${{ secrets.OPENAI_API_KEY }}", trigger)
+        self.assertIn("allow-bots: github-actions[bot]", trigger)
+        self.assertIn("expected_label:", trigger)
+        self.assertIn("gh workflow run codex-build-trigger.yml", converge)
+        self.assertNotIn("@codex", trigger)
+        self.assertNotIn("@codex", converge)
+        self.assertNotIn("CODEX_RUNNER_LOGIN", converge)
+
     def test_sweeper_uses_explicit_dispatch_instead_of_trigger_labels(self) -> None:
         trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
         sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
         self.assertIn("workflow_dispatch:", trigger)
         self.assertIn("issue_number:", trigger)
+        self.assertIn("expected_label:", trigger)
         self.assertIn("actions: write", sweep)
         self.assertEqual(3, sweep.count("gh workflow run codex-build-trigger.yml"))
+        self.assertEqual(3, sweep.count("-f expected_label="))
         self.assertNotIn("--add-label codex-build", sweep)
 
     def test_sweeper_uses_current_loop_activity_before_recovery(self) -> None:
@@ -186,10 +298,18 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn('.state == "pending"', sweep)
 
     def test_codex_success_replaces_running_with_ready(self) -> None:
-        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        iteration = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()
         sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
-        self.assertIn("replace the linked issue's codex-running label with codex-ready", converge)
+        self.assertIn("replace `codex-running`\n   with `codex-ready`", iteration)
         self.assertIn("--remove-label codex-running", sweep)
+
+    def test_dependency_resume_markers_prevent_stale_unparking(self) -> None:
+        codex = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        claude = (ROOT / "ClaudeCodePlugin/claude-loop/payload/SWEEP_ROUTINE_PROMPT.md").read_text()
+        self.assertIn("codex-dependency-resumed #$DEP", codex)
+        self.assertIn('"$RESUMED_LINE" -gt "$WAIT_LINE"', codex)
+        self.assertIn("most recent", claude)
+        self.assertIn("claude-dependency-resumed #<x>", claude)
 
     def test_policy_issues_are_created_without_build_labels(self) -> None:
         paths = (
@@ -222,11 +342,39 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn(".github/workflows/claude-converge-trigger.yml", claude_skill)
         self.assertIn("never overwrite an existing workflow", codex_skill)
         self.assertIn("CLAUDE_RUNNER_LOGIN repo variable", installer)
+        self.assertIn("OPENAI_API_KEY", codex_skill)
+        self.assertNotIn("CODEX_RUNNER_LOGIN", codex_skill)
 
     def test_codex_escalation_blocks_the_linked_issue(self) -> None:
         skill = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()
         self.assertIn("replace `codex-running` with `codex-blocked`", skill)
         self.assertIn("Verify the issue has exactly the blocked terminal label", skill)
+
+    def test_claude_completion_and_escalation_set_terminal_labels(self) -> None:
+        for path in (
+            "ClaudeCode-script/.claude/skills/pr-iteration/SKILL.md",
+            "ClaudeCodePlugin/claude-loop/payload/skills/pr-iteration/SKILL.md",
+        ):
+            with self.subTest(path=path):
+                skill = (ROOT / path).read_text()
+                self.assertIn("replace `claude-running`\n   with `claude-ready`", skill)
+                self.assertIn("replace `claude-running` with `claude-blocked`", skill)
+
+    def test_archive_verification_is_read_only_and_modes_are_normalized(self) -> None:
+        build = (ROOT / "scripts/build-plugins.sh").read_text()
+        test = (ROOT / "scripts/test-scaffolds.sh").read_text()
+        self.assertIn("--check", build)
+        self.assertIn("0o755 if", build)
+        self.assertIn('"$ROOT/scripts/build-plugins.sh" --check', test)
+        self.assertNotIn("if rg -n", test)
+
+    def test_claude_docs_name_the_current_issue_trigger(self) -> None:
+        readme = (ROOT / "ClaudeCode-script/README.md").read_text()
+        fallback = (ROOT / "ClaudeCodePlugin/claude-loop/payload/fallback/claude-build-trigger.yml").read_text()
+        plan = (ROOT / "ClaudeCodePlugin/claude-loop/payload/skills/plan-to-issue/SKILL.md").read_text()
+        self.assertIn('native GitHub trigger "Issue: Labeled"', readme)
+        self.assertIn("Issue: Labeled + Labels", fallback)
+        self.assertIn("fires the Issue: Labeled routine", plan)
 
 
 class InstallerTests(unittest.TestCase):
@@ -276,6 +424,56 @@ class InstallerTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertEqual(before, settings.read_bytes())
             self.assertEqual([settings], [path for path in (repo / ".claude").rglob("*") if path.is_file()])
+
+    def test_existing_labels_are_listed_without_attempting_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            run("git", "init", "-q", repo)
+            binary = repo / "bin"
+            binary.mkdir()
+            log = repo / "label-create.log"
+            gh = binary / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1 $2\" == \"auth status\" ]]; then exit 0; fi\n"
+                "if [[ \"$1 $2\" == \"label list\" ]]; then printf '%s\\n' claude-build claude-running claude-ready claude-blocked; exit 0; fi\n"
+                "if [[ \"$1 $2\" == \"label create\" ]]; then printf '%s\\n' \"$*\" >> \"$GH_LOG\"; exit 99; fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{binary}:{env['PATH']}"
+            env["GH_LOG"] = str(log)
+            result = run("/bin/bash", ROOT / "ClaudeCode-script/install.sh", repo, cwd=ROOT, env=env)
+            self.assertIn("claude-build exists", result.stdout)
+            self.assertFalse(log.exists())
+
+    def test_label_inspection_failure_does_not_attempt_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            run("git", "init", "-q", repo)
+            binary = repo / "bin"
+            binary.mkdir()
+            log = repo / "label-create.log"
+            gh = binary / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1 $2\" == \"auth status\" ]]; then exit 0; fi\n"
+                "if [[ \"$1 $2\" == \"label list\" ]]; then exit 77; fi\n"
+                "if [[ \"$1 $2\" == \"label create\" ]]; then printf '%s\\n' \"$*\" >> \"$GH_LOG\"; exit 0; fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{binary}:{env['PATH']}"
+            env["GH_LOG"] = str(log)
+            result = run("/bin/bash", ROOT / "ClaudeCode-script/install.sh", repo, cwd=ROOT, env=env)
+            self.assertIn("could not inspect repository labels", result.stderr)
+            self.assertFalse(log.exists())
 
 
 if __name__ == "__main__":

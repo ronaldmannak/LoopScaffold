@@ -6,7 +6,7 @@ waiting, instant wake on CI completion) → claude-ready → human merges.**
 An event-driven split (Routine A + converger B) is included for repos with
 very long CI.
 
-v3: native GitHub trigger "Issue opened" + Labels filter (ahead of the docs);
+v3: native GitHub trigger "Issue: Labeled" + Labels filter;
 the Action bridge is kept inert in .claude/fallback/.
 v4 (second external review): label state machine with terminal states and
 label-driven resume; Bash guard blocking dangerous git/gh commands; head-SHA
@@ -46,7 +46,7 @@ claude-converge-trigger.yml) remains available.
 ├── scripts/
 │   ├── checks.sh                  # build/test/lint, timeouts, summary + logs
 │   ├── protect-files.sh           # tripwire: policy files + obvious test weakening
-│   └── guard-bash.sh              # blocks force-push, push-to-main, merge, rm Tests/
+│   └── guard-bash.sh              # blocks force-push, push-to-main, merge, common test-deletion commands
 └── fallback/
     └── claude-build-trigger.yml   # INERT Action bridge, only if native trigger breaks
 ```
@@ -302,8 +302,9 @@ per the verification skill in every PR update.
   completion, and keeps all context in one session (no rehydration cost).
   Fresh-context-per-iteration only starts paying for itself when waits are
   long enough that a single session becomes impractical.
-- **Deletion of test files** happens via Bash, which the hook doesn't see;
-  branch protection + the reviewer + "Test changes" PR section cover it.
+- **Deletion of test files:** the Bash hook blocks common `rm` and `git rm`
+  forms, while branch protection, CI, and review remain the final enforcement
+  layer for variants a command tripwire cannot prove safe.
 - Run status green means the session ran, not that the task succeeded —
   read the transcript or trust only the PR + CI state.
 - Routines act under **your GitHub identity**; runs count against your

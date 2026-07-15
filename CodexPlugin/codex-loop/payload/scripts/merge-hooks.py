@@ -22,7 +22,7 @@ def load_object(path: Path, *, missing_ok: bool = False) -> dict[str, Any]:
     if missing_ok and not path.exists():
         return {}
     try:
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"merge-hooks: cannot read valid JSON from {path}: {error}")
     if not isinstance(value, dict):
@@ -63,7 +63,7 @@ def atomic_write(path: Path, value: dict[str, Any]) -> None:
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, indent=2)
             stream.write("\n")
             stream.flush()

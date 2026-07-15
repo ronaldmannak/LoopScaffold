@@ -11,12 +11,31 @@ if python3 -c 'import yaml' >/dev/null 2>&1; then
   HAVE_PYYAML=true
   python3 - <<'PY'
 from pathlib import Path
+import subprocess
 import yaml
+
+def validate_runs(node, path, trail=()):
+    if isinstance(node, dict):
+        for key, child in node.items():
+            if key == "run" and isinstance(child, str):
+                result = subprocess.run(
+                    ["bash", "-n"], input=child, text=True, capture_output=True
+                )
+                if result.returncode:
+                    location = ".".join((*trail, str(key)))
+                    raise SystemExit(f"{path}:{location}: {result.stderr.strip()}")
+            else:
+                validate_runs(child, path, (*trail, str(key)))
+    elif isinstance(node, list):
+        for index, child in enumerate(node):
+            validate_runs(child, path, (*trail, str(index)))
 
 for pattern in ("*.yml", "*.yaml"):
     for path in Path(".").rglob(pattern):
         if ".git" not in path.parts:
-            yaml.compose(path.read_text())
+            source = path.read_text(encoding="utf-8")
+            yaml.compose(source)
+            validate_runs(yaml.load(source, Loader=yaml.BaseLoader), path)
 PY
 else
   echo "note: PyYAML unavailable; skipped YAML syntax validation" >&2
@@ -31,11 +50,35 @@ diff -qr \
   --exclude SWEEP_ROUTINE_PROMPT.md \
   ClaudeCode-script/.claude ClaudeCodePlugin/claude-loop/payload
 
-if rg -n '\.claude|claude-(build|running|ready|blocked)|claude/|CLAUDE_PLUGIN_ROOT|PLUGIN_ROOT|\.codex/rules|disable-model-invocation' \
-  CodexPlugin/codex-loop/payload; then
-  echo "Codex payload contains Claude-only or stale Codex references" >&2
-  exit 1
-fi
+cmp ClaudeCode-script/.claude/scripts/guard-bash.sh \
+  CodexPlugin/codex-loop/payload/scripts/guard-bash.sh
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+claude_checks = Path("ClaudeCode-script/.claude/scripts/checks.sh").read_text(encoding="utf-8")
+codex_checks = Path("CodexPlugin/codex-loop/payload/scripts/checks.sh").read_text(encoding="utf-8")
+if claude_checks != codex_checks.replace(".codex", ".claude"):
+    raise SystemExit("Claude and Codex checks.sh implementations drifted")
+
+forbidden = re.compile(
+    r"\.claude|claude-(?:build|running|ready|blocked)|claude/|"
+    r"CLAUDE_PLUGIN_ROOT|PLUGIN_ROOT|\.codex/rules|disable-model-invocation"
+)
+root = Path("CodexPlugin/codex-loop/payload")
+matches: list[str] = []
+for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError:
+        continue
+    for number, line in enumerate(lines, 1):
+        if forbidden.search(line):
+            matches.append(f"{path}:{number}:{line}")
+if matches:
+    print("\n".join(matches))
+    raise SystemExit("Codex payload contains Claude-only or stale Codex references")
+PY
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 PLUGIN_VALIDATOR="$CODEX_HOME/skills/.system/plugin-creator/scripts/validate_plugin.py"
@@ -57,7 +100,7 @@ else
   echo "note: claude CLI unavailable; skipped Claude plugin validator" >&2
 fi
 
-"$ROOT/scripts/build-plugins.sh"
+"$ROOT/scripts/build-plugins.sh" --check
 unzip -t ClaudeCodePlugin/claude-loop.plugin >/dev/null
 unzip -t CodexPlugin/codex-loop.plugin >/dev/null
 echo "all scaffold checks passed"

@@ -1,10 +1,8 @@
 name: Trigger Claude build routine
-# Bridge: routines don't support issue events natively (only PR + release),
-#
-# FALLBACK — NOT ACTIVE. The native routine trigger (Issue opened + Labels
-# filter) replaces this. Move this file to .github/workflows/ only if the
-# native issue trigger disappears or misbehaves (it is undocumented preview).
-# so this Action fires the routine's API trigger when an issue is labeled.
+# FALLBACK — NOT ACTIVE. The native routine trigger (Issue: Labeled + Labels
+# filter) replaces this. Move this file to .github/workflows/ only if that
+# native trigger is unavailable or misbehaves.
+# When activated, this Action fires the routine's API trigger on that event.
 #
 # Setup:
 #   1. Create the routine with an API trigger at claude.ai/code/routines.

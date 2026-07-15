@@ -41,9 +41,13 @@ if [[ -f .claude/settings.json ]]; then
 else
   printf '{}\n' > "$SETTINGS_TMP"
 fi
-# Preflight the complete merge before changing any repository file.
-python3 "$SRC/.claude/scripts/merge-settings.py" \
-  "$SETTINGS_TMP" "$SRC/.claude/settings.json"
+# Preflight the complete merge before changing any repository file. Rewrite the
+# private temporary path in diagnostics so the user sees the actual bad file.
+if ! MERGE_ERROR=$(python3 "$SRC/.claude/scripts/merge-settings.py" \
+  "$SETTINGS_TMP" "$SRC/.claude/settings.json" 2>&1); then
+  echo "${MERGE_ERROR//$SETTINGS_TMP/.claude/settings.json}" >&2
+  exit 1
+fi
 
 echo "==> Installing scaffold files"
 mkdir -p .claude
@@ -99,16 +103,21 @@ fi
 echo "==> GitHub labels (idempotent)"
 if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
   LABEL_ERRORS=false
-  for l in claude-build claude-running claude-ready claude-blocked; do
-    if gh label view "$l" >/dev/null 2>&1; then
-      echo "    $l exists"
-    elif gh label create "$l" >/dev/null 2>&1; then
-      echo "    created $l"
-    else
-      echo "    ERROR: could not inspect or create $l" >&2
-      LABEL_ERRORS=true
-    fi
-  done
+  if ! LABEL_NAMES=$(gh label list --limit 1000 --json name --jq '.[].name'); then
+    echo "    ERROR: could not inspect repository labels; no label changes attempted" >&2
+    LABEL_ERRORS=true
+  else
+    for l in claude-build claude-running claude-ready claude-blocked; do
+      if printf '%s\n' "$LABEL_NAMES" | grep -Fxq "$l"; then
+        echo "    $l exists"
+      elif gh label create "$l" >/dev/null 2>&1; then
+        echo "    created $l"
+      else
+        echo "    ERROR: inspected labels but could not create missing label $l" >&2
+        LABEL_ERRORS=true
+      fi
+    done
+  fi
   $LABEL_ERRORS && echo "    label setup incomplete — fix the reported GitHub access/repository error before relying on the loop" >&2
 else
   echo "    gh not available/authed — create labels manually: claude-build claude-running claude-ready claude-blocked"

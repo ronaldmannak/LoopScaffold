@@ -59,10 +59,13 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 1. Re-read the head SHA: `gh pr view <pr> --json headRefOid --jq .headRefOid`.
 2. If it differs from the $HEAD_SHA your status snapshot used, discard the snapshot and return to step 1 — green checks for a stale commit prove nothing.
 3. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
+4. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
+   with `claude-ready`, then verify the issue has exactly one state label and
+   that it is `claude-ready` (not `claude-running` or `claude-blocked`).
 
 ## Escalation (cap hit, repeated failure, or genuinely stuck)
 
-Post ONE comment on the PR containing: what fails, your diagnosis, what you tried (with commit refs), and your best hypothesis. Then stop. A stalled loop with a good diagnosis is a success condition, not a failure — burning iterations past the cap is the failure.
+Post ONE comment on the PR containing: what fails, your diagnosis, what you tried (with commit refs), and your best hypothesis. Then find the linked issue from the PR's `Closes #N`, post an issue escalation containing the diagnosis, attempts, commit refs, and specific questions, and replace `claude-running` with `claude-blocked`. Verify the issue has exactly the blocked terminal label before stopping. A stalled loop with a good diagnosis and a blocked issue is a success condition, not a failure — burning iterations past the cap or leaving the issue running is the failure.
 
 ## Never
 

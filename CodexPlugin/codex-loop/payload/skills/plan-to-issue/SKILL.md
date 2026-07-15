@@ -40,7 +40,7 @@ Explicit non-goals, so the implementer doesn't expand scope.
 
 ## Policy-change plans are NOT routine-buildable
 
-If the approved plan requires changes under `.codex/`, `.agents/skills/`, `AGENTS.md`, or `.github/workflows/` (rules, hooks, checks.sh, skills, CI definitions), do NOT apply the `codex-build` label — the implementation routine is deterministically blocked from editing those paths. Create the issue WITHOUT the label, note "requires human-supervised implementation" in the body, and tell the human to implement it in an interactive session where they approve each change.
+If the approved plan requires changes under `.codex/`, `.agents/skills/`, `AGENTS.md`, or `.github/workflows/` (rules, hooks, checks.sh, skills, CI definitions), do NOT apply the `codex-build` label — loop policy and hooks put those paths outside unattended scope. Create the issue WITHOUT the label, note "requires human-supervised implementation" in the body, and tell the human to implement it in an interactive session where they approve each change.
 
 ## Procedure
 
@@ -51,5 +51,5 @@ If the approved plan requires changes under `.codex/`, `.agents/skills/`, `AGENT
      in the body and run `gh issue create --title "..." --body "..."` with
      no build label.
 3. Report the issue URL. Only the routine-buildable path applies
-   `codex-build`, which fires the GitHub Action bridge — never apply it to an
+   `codex-build`, which fires the supported Codex build workflow — never apply it to an
    issue that isn't ready for unattended implementation.

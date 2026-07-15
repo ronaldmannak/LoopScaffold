@@ -1,5 +1,5 @@
 name: Codex converge trigger
-# Wakes Codex on the PR the moment there is something to act on.
+# Re-runs the supported Codex action when CI or a review gives an open Codex PR new work.
 on:
   workflow_run:
     workflows: ["CI"]            # <-- set to your CI workflow's name (Actions CI only; Xcode Cloud repos use pull_request status polling in the sweep instead)
@@ -10,25 +10,46 @@ concurrency:
   group: codex-converge-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
   cancel-in-progress: true
 jobs:
-  summon:
+  dispatch:
     if: >
       (github.event_name == 'workflow_run'
         && startsWith(github.event.workflow_run.head_branch, 'codex/'))
       || (github.event_name == 'pull_request_review'
-        && startsWith(github.event.pull_request.head.ref, 'codex/')
-        && vars.CODEX_RUNNER_LOGIN != ''
-        && github.event.review.user.login != vars.CODEX_RUNNER_LOGIN)
+        && startsWith(github.event.pull_request.head.ref, 'codex/'))
     runs-on: ubuntu-latest
-    permissions: { pull-requests: write, issues: write }
+    permissions:
+      actions: write
+      issues: read
+      pull-requests: read
     steps:
-      - name: Summon Codex on the PR
+      - name: Dispatch the linked issue
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
           R: ${{ github.repository }}
-          REASON: ${{ github.event_name }}
-          CONCLUSION: ${{ github.event.workflow_run.conclusion || 'review-submitted' }}
         run: |
-          PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number') || exit 0
+          if ! PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number // ""'); then
+            echo "::error::Could not find the pull request for $BRANCH"
+            exit 1
+          fi
           [ -z "$PR" ] && exit 0
-          gh pr comment "$PR" -R "$R" --body "@codex Wake reason: $REASON ($CONCLUSION). Apply the \$pr-iteration skill: snapshot current head SHA and completed checks, triage all review comments, fix ONE coherent batch (use \$ci-diagnosis for failed checks), verify with .codex/scripts/checks.sh, push. If everything is green and triaged, replace the linked issue's codex-running label with codex-ready and verify it has exactly one state label. Respect the caps in AGENTS.md."
+          if ! BODY=$(gh pr view "$PR" -R "$R" --json body --jq '.body // ""'); then
+            echo "::error::Could not read PR #$PR"
+            exit 1
+          fi
+          N=$(printf '%s\n' "$BODY" | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+          [ -z "$N" ] && exit 0
+          if ! LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
+            echo "::error::Could not inspect linked issue #$N"
+            exit 1
+          fi
+          if printf '%s\n' "$LABELS" | grep -Fxq codex-ready; then
+            EXPECTED=codex-ready
+          elif printf '%s\n' "$LABELS" | grep -Fxq codex-running; then
+            EXPECTED=codex-running
+          else
+            echo "::notice::Linked issue #$N is not active; ignoring stale converge event"
+            exit 0
+          fi
+          gh workflow run codex-build-trigger.yml -R "$R" \
+            -f issue_number="$N" -f expected_label="$EXPECTED"
