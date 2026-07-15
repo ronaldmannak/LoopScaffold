@@ -6,7 +6,9 @@ cd "$ROOT"
 
 while IFS= read -r script; do bash -n "$script"; done < <(find . -type f -name '*.sh' ! -path './.git/*' | sort)
 while IFS= read -r json; do python3 -m json.tool "$json" >/dev/null; done < <(find . -type f -name '*.json' ! -path './.git/*' | sort)
+HAVE_PYYAML=false
 if python3 -c 'import yaml' >/dev/null 2>&1; then
+  HAVE_PYYAML=true
   python3 - <<'PY'
 from pathlib import Path
 import yaml
@@ -24,6 +26,7 @@ python3 -m unittest discover -s tests -v
 
 diff -qr \
   --exclude .DS_Store \
+  --exclude CONVERGE_ROUTINE_PROMPT.md \
   --exclude ROUTINE_PROMPT.md \
   --exclude SWEEP_ROUTINE_PROMPT.md \
   ClaudeCode-script/.claude ClaudeCodePlugin/claude-loop/payload
@@ -37,11 +40,13 @@ fi
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 PLUGIN_VALIDATOR="$CODEX_HOME/skills/.system/plugin-creator/scripts/validate_plugin.py"
 SKILL_VALIDATOR="$CODEX_HOME/skills/.system/skill-creator/scripts/quick_validate.py"
-if [[ -f "$PLUGIN_VALIDATOR" && -f "$SKILL_VALIDATOR" ]]; then
+if [[ -f "$PLUGIN_VALIDATOR" && -f "$SKILL_VALIDATOR" && "$HAVE_PYYAML" == true ]]; then
   python3 "$PLUGIN_VALIDATOR" CodexPlugin/codex-loop
   while IFS= read -r skill; do
     python3 "$SKILL_VALIDATOR" "$(dirname "$skill")"
   done < <(find CodexPlugin/codex-loop -type f -name SKILL.md | sort)
+elif [[ -f "$PLUGIN_VALIDATOR" && -f "$SKILL_VALIDATOR" ]]; then
+  echo "note: Codex plugin/skill validators require PyYAML; skipped because it is unavailable" >&2
 else
   echo "note: Codex plugin/skill validators unavailable under $CODEX_HOME" >&2
 fi

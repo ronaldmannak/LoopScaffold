@@ -19,20 +19,15 @@ jobs:
       - name: Claim and summon Codex
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
           N: ${{ github.event.issue.number || inputs.issue_number }}
           R: ${{ github.repository }}
         run: |
           case "$N" in ''|*[!0-9]*) echo "::error::Invalid issue number: $N"; exit 2;; esac
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            for LABEL in codex-build codex-blocked codex-ready; do
-              gh issue edit "$N" -R "$R" --remove-label "$LABEL" >/dev/null 2>&1 || true
-            done
-            gh issue edit "$N" -R "$R" --add-label codex-running
-          else
-            gh issue edit "$N" -R "$R" --remove-label codex-build --add-label codex-running
-          fi
-          if ! gh issue comment "$N" -R "$R" --body "@codex Implement this issue. It is the complete spec. Follow the repo's AGENTS.md loop rules and the \$pr-iteration, \$verification, and \$code-review skills. Branch codex/issue-$N-<slug>; open a READY-for-review PR 'Closes #$N'; converge CI and reviews; end with this issue labeled codex-ready, or codex-blocked with a diagnosis comment. Never merge; never push to main."; then
+          for LABEL in codex-build codex-blocked codex-ready; do
+            gh issue edit "$N" -R "$R" --remove-label "$LABEL" >/dev/null 2>&1 || true
+          done
+          gh issue edit "$N" -R "$R" --add-label codex-running
+          if ! gh issue comment "$N" -R "$R" --body "@codex Implement this issue. It is the complete spec. Follow the repo's AGENTS.md loop rules and the \$pr-iteration, \$verification, and \$code-review skills. Branch codex/issue-$N-<slug>; open a READY-for-review PR 'Closes #$N'; converge CI and reviews; finish by replacing codex-running with exactly one terminal state: codex-ready, or codex-blocked with a diagnosis comment. Never merge; never push to main."; then
             gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-blocked || true
             echo "::error::Codex summon comment failed; issue moved from codex-running to codex-blocked"
             exit 1

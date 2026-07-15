@@ -25,7 +25,7 @@ scripts/test-scaffolds.sh
 
 The command checks shell and JSON syntax, checks YAML syntax when PyYAML is
 available, runs clean-room installer/merge tests, validates the Codex plugin
-and skills when their validators are installed, validates the Claude plugin
+and skills when their validators and PyYAML are available, validates the Claude plugin
 when the Claude CLI is installed, rebuilds both archives deterministically,
 and checks ZIP integrity.
 

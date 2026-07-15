@@ -45,7 +45,11 @@ If the approved plan requires changes under `.codex/`, `.agents/skills/`, `AGENT
 ## Procedure
 
 1. Draft the issue body; show the human for a quick confirm.
-2. `gh issue create --title "..." --body "..." --label codex-build`
-3. Report the issue URL. The `codex-build` label fires the GitHub Action
-   bridge that triggers the implementation routine — never apply it to an
-   issue that isn't ready to build.
+2. Choose exactly one creation path:
+   - Routine-buildable plan: `gh issue create --title "..." --body "..." --label codex-build`
+   - Policy-change plan: include "requires human-supervised implementation"
+     in the body and run `gh issue create --title "..." --body "..."` with
+     no build label.
+3. Report the issue URL. Only the routine-buildable path applies
+   `codex-build`, which fires the GitHub Action bridge — never apply it to an
+   issue that isn't ready for unattended implementation.

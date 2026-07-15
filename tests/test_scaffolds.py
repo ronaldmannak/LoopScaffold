@@ -158,6 +158,8 @@ class ReviewRegressionTests(unittest.TestCase):
         script = (ROOT / "scripts/test-scaffolds.sh").read_text()
         self.assertIn("if python3 -c 'import yaml'", script)
         self.assertIn("PyYAML unavailable; skipped YAML syntax validation", script)
+        self.assertIn('"$HAVE_PYYAML" == true', script)
+        self.assertIn("Codex plugin/skill validators require PyYAML", script)
 
     def test_codex_converger_wakes_on_every_completed_ci_run(self) -> None:
         workflow = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
@@ -172,6 +174,46 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("actions: write", sweep)
         self.assertEqual(3, sweep.count("gh workflow run codex-build-trigger.yml"))
         self.assertNotIn("--add-label codex-build", sweep)
+
+    def test_sweeper_uses_current_loop_activity_before_recovery(self) -> None:
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        self.assertIn("checks: read", sweep)
+        self.assertIn("statuses: read", sweep)
+        self.assertIn("--json updatedAt", sweep)
+        self.assertIn(".reviews[]?.submittedAt", sweep)
+        self.assertIn("/check-runs?per_page=100", sweep)
+        self.assertIn('.status != "completed"', sweep)
+        self.assertIn('.state == "pending"', sweep)
+
+    def test_codex_success_replaces_running_with_ready(self) -> None:
+        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        self.assertIn("replace the linked issue's codex-running label with codex-ready", converge)
+        self.assertIn("--remove-label codex-running", sweep)
+
+    def test_policy_issues_are_created_without_build_labels(self) -> None:
+        paths = (
+            "CodexPlugin/codex-loop/payload/skills/plan-to-issue/SKILL.md",
+            "ClaudeCodePlugin/claude-loop/payload/skills/plan-to-issue/SKILL.md",
+            "ClaudeCode-script/.claude/skills/plan-to-issue/SKILL.md",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                skill = (ROOT / path).read_text()
+                self.assertIn("Choose exactly one creation path", skill)
+                self.assertIn('gh issue create --title "..." --body "..."` with\n     no build label', skill)
+
+    def test_claude_empty_backlog_and_split_converger_are_fully_specified(self) -> None:
+        routine = (ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md").read_text()
+        init_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
+        standalone_readme = (ROOT / "ClaudeCode-script/README.md").read_text()
+        prompt = ROOT / "ClaudeCodePlugin/claude-loop/payload/CONVERGE_ROUTINE_PROMPT.md"
+        self.assertIn("no dispatch comment is required for an empty backlog", routine)
+        self.assertTrue(prompt.is_file())
+        self.assertIn("CONVERGE_ROUTINE_PROMPT.md", init_skill)
+        self.assertIn("You were woken because something happened", prompt.read_text())
+        self.assertIn("verify it has exactly one state", prompt.read_text())
+        self.assertIn(prompt.read_text(), standalone_readme)
 
     def test_install_guidance_covers_managed_workflow_state(self) -> None:
         claude_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()

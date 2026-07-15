@@ -6,7 +6,7 @@ on:
 jobs:
   sweep:
     runs-on: ubuntu-latest
-    permissions: { actions: write, contents: read, issues: write, pull-requests: write }
+    permissions: { actions: write, checks: read, contents: read, issues: write, pull-requests: write, statuses: read }
     env: { GH_TOKEN: "${{ github.token }}", R: "${{ github.repository }}" }
     steps:
       - name: Unpark merged dependencies
@@ -34,14 +34,53 @@ jobs:
           done
       - name: Recover dead runs (one retry, then block)
         run: |
+          record_activity() {
+            local timestamp="$1"
+            local epoch
+            [ -z "$timestamp" ] && return
+            epoch=$(date -d "$timestamp" +%s)
+            if [ "$epoch" -gt "$LAST_ACTIVITY_EPOCH" ]; then
+              LAST_ACTIVITY_EPOCH=$epoch
+            fi
+          }
+
           for N in $(gh issue list -R "$R" --label codex-running --state open --json number --jq '.[].number'); do
+            STATE_LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name')
+            if printf '%s\n' "$STATE_LABELS" | grep -Eq '^codex-(ready|blocked)$'; then
+              gh issue edit "$N" -R "$R" --remove-label codex-running
+              continue
+            fi
+
+            ISSUE_UPDATED=$(gh issue view "$N" -R "$R" --json updatedAt --jq .updatedAt)
+            LAST_ACTIVITY_EPOCH=$(date -d "$ISSUE_UPDATED" +%s)
             BR=$(gh api "repos/$R/branches" --paginate --jq ".[].name" | grep "^codex/issue-$N-" | head -1 || true)
             if [ -n "$BR" ]; then
-              LAST=$(gh api "repos/$R/commits?sha=$BR&per_page=1" --jq '.[0].commit.committer.date')
-            else
-              LAST=$(gh issue view "$N" -R "$R" --json updatedAt --jq .updatedAt)
+              HEAD_SHA=$(gh api "repos/$R/commits?sha=$BR&per_page=1" --jq '.[0].sha')
+              COMMIT_UPDATED=$(gh api "repos/$R/commits?sha=$BR&per_page=1" --jq '.[0].commit.committer.date')
+              record_activity "$COMMIT_UPDATED"
+
+              PR_NUMBER=$(gh pr list -R "$R" --head "$BR" --state open --json number --jq '.[0].number // ""')
+              if [ -n "$PR_NUMBER" ]; then
+                PR_ACTIVITY=$(gh pr view "$PR_NUMBER" -R "$R" --json comments,reviews,updatedAt --jq '[.updatedAt, (.comments[]?.updatedAt), (.reviews[]?.submittedAt)] | map(select(. != null)) | max // ""')
+                record_activity "$PR_ACTIVITY"
+              fi
+
+              CHECK_RUNS=$(gh api "repos/$R/commits/$HEAD_SHA/check-runs?per_page=100")
+              if printf '%s' "$CHECK_RUNS" | jq -e '.check_runs[]? | select(.status != "completed")' >/dev/null; then
+                continue
+              fi
+              CHECK_UPDATED=$(printf '%s' "$CHECK_RUNS" | jq -r '[.check_runs[]?.completed_at | select(. != null)] | max // ""')
+              record_activity "$CHECK_UPDATED"
+
+              COMMIT_STATUS=$(gh api "repos/$R/commits/$HEAD_SHA/status")
+              if printf '%s' "$COMMIT_STATUS" | jq -e '.statuses[]? | select(.state == "pending")' >/dev/null; then
+                continue
+              fi
+              STATUS_UPDATED=$(printf '%s' "$COMMIT_STATUS" | jq -r '[.statuses[]?.updated_at | select(. != null)] | max // ""')
+              record_activity "$STATUS_UPDATED"
             fi
-            AGE=$(( ($(date +%s) - $(date -d "$LAST" +%s)) / 3600 ))
+
+            AGE=$(( ($(date +%s) - LAST_ACTIVITY_EPOCH) / 3600 ))
             if [ "$AGE" -ge 2 ]; then
               if gh issue view "$N" -R "$R" --json comments --jq '.comments[].body' | grep -q codex-dead-run-retry; then
                 gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-blocked

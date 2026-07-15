@@ -31,4 +31,4 @@ jobs:
         run: |
           PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number') || exit 0
           [ -z "$PR" ] && exit 0
-          gh pr comment "$PR" -R "$R" --body "@codex Wake reason: $REASON ($CONCLUSION). Apply the \$pr-iteration skill: snapshot current head SHA and completed checks, triage all review comments, fix ONE coherent batch (use \$ci-diagnosis for failed checks), verify with .codex/scripts/checks.sh, push. If everything is green and triaged, label the linked issue codex-ready. Respect the caps in AGENTS.md."
+          gh pr comment "$PR" -R "$R" --body "@codex Wake reason: $REASON ($CONCLUSION). Apply the \$pr-iteration skill: snapshot current head SHA and completed checks, triage all review comments, fix ONE coherent batch (use \$ci-diagnosis for failed checks), verify with .codex/scripts/checks.sh, push. If everything is green and triaged, replace the linked issue's codex-running label with codex-ready and verify it has exactly one state label. Respect the caps in AGENTS.md."
