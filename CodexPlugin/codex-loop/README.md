@@ -12,7 +12,10 @@ convergence run through the documented
 repository must provide an `OPENAI_API_KEY` Actions secret, and those runs use
 API billing. The optional external-review fallback still uses the documented
 [`@codex review`](https://learn.chatgpt.com/docs/third-party/github) PR comment.
-The sweeper is pure bash — label mechanics need no model.
+The sweeper is pure bash — label mechanics need no model. External CI wakes it
+through GitHub's `check_run` or `status` events; a head-SHA/completion-time
+marker makes each completed result dispatch exactly once, and the hourly run
+remains a missed-event fallback.
 
 Install the plugin, run $loop-init in a repo, follow the printed steps.
 Labels codex-* and branches codex/* — designed to coexist with

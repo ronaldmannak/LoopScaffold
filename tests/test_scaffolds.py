@@ -283,8 +283,8 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("issue_number:", trigger)
         self.assertIn("expected_label:", trigger)
         self.assertIn("actions: write", sweep)
-        self.assertEqual(3, sweep.count("gh workflow run codex-build-trigger.yml"))
-        self.assertEqual(3, sweep.count("-f expected_label="))
+        self.assertEqual(4, sweep.count("gh workflow run codex-build-trigger.yml"))
+        self.assertEqual(4, sweep.count("-f expected_label="))
         self.assertNotIn("--add-label codex-build", sweep)
 
     def test_sweeper_uses_current_loop_activity_before_recovery(self) -> None:
@@ -296,6 +296,17 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("/check-runs?per_page=100", sweep)
         self.assertIn('.status != "completed"', sweep)
         self.assertIn('.state == "pending"', sweep)
+
+    def test_sweeper_dispatches_each_external_ci_completion_once(self) -> None:
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        self.assertIn("check_run:\n    types: [completed]", sweep)
+        self.assertIn("status:\nconcurrency:", sweep)
+        self.assertIn('select((.app.slug // "") != "github-actions"', sweep)
+        self.assertIn("CI_SIGNAL_COUNT=$(( EXTERNAL_CHECK_COUNT + STATUS_COUNT ))", sweep)
+        self.assertIn('[ "$CI_SIGNAL_COUNT" -gt 0 ]', sweep)
+        self.assertIn('CI_MARKER="codex-ci-dispatched $HEAD_SHA $CI_COMPLETED_AT"', sweep)
+        self.assertIn('grep -Fq "$CI_MARKER"', sweep)
+        self.assertIn('-f issue_number="$N" -f expected_label=codex-running', sweep)
 
     def test_codex_success_replaces_running_with_ready(self) -> None:
         iteration = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()

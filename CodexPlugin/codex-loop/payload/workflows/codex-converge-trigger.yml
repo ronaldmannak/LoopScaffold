@@ -2,7 +2,7 @@ name: Codex converge trigger
 # Re-runs the supported Codex action when CI or a review gives an open Codex PR new work.
 on:
   workflow_run:
-    workflows: ["CI"]            # <-- set to your CI workflow's name (Actions CI only; Xcode Cloud repos use pull_request status polling in the sweep instead)
+    workflows: ["CI"]            # <-- set to your CI workflow's name (Actions CI only; external CI wakes codex-sweep through check/status events instead)
     types: [completed]
   pull_request_review:
     types: [submitted]

@@ -1,8 +1,14 @@
 name: Codex queue sweep
-# Pure recovery orchestration; model work is started through workflow_dispatch. Hourly.
+# Pure orchestration; model work is started through workflow_dispatch.
 on:
   schedule: [{ cron: "17 * * * *" }]
   workflow_dispatch:
+  check_run:
+    types: [completed]
+  status:
+concurrency:
+  group: codex-queue-sweep
+  cancel-in-progress: false
 jobs:
   sweep:
     runs-on: ubuntu-latest
@@ -53,7 +59,7 @@ jobs:
               fi
             fi
           done
-      - name: Recover dead runs (one retry, then block)
+      - name: Resume completed external CI or recover dead runs
         run: |
           record_activity() {
             local timestamp="$1"
@@ -131,6 +137,11 @@ jobs:
                 continue
               fi
               record_activity "$CHECK_UPDATED" || continue
+              if ! EXTERNAL_CHECK_COUNT=$(printf '%s' "$CHECK_RUNS" | jq -er '[.check_runs[]? | select((.app.slug // "") != "github-actions" and .status == "completed")] | length') || \
+                 ! EXTERNAL_CHECK_UPDATED=$(printf '%s' "$CHECK_RUNS" | jq -er '[.check_runs[]? | select((.app.slug // "") != "github-actions") | .completed_at | select(. != null)] | max // ""'); then
+                echo "::warning::Malformed external-check response for $HEAD_SHA"
+                continue
+              fi
 
               if ! COMMIT_STATUS=$(gh api "repos/$R/commits/$HEAD_SHA/status"); then
                 echo "::warning::Could not inspect commit statuses for $HEAD_SHA"
@@ -144,6 +155,34 @@ jobs:
                 continue
               fi
               record_activity "$STATUS_UPDATED" || continue
+              if ! STATUS_COUNT=$(printf '%s' "$COMMIT_STATUS" | jq -er '.statuses | length'); then
+                echo "::warning::Malformed status count for $HEAD_SHA"
+                continue
+              fi
+
+              CI_SIGNAL_COUNT=$(( EXTERNAL_CHECK_COUNT + STATUS_COUNT ))
+              if [ -n "$PR_NUMBER" ] && [ "$CI_SIGNAL_COUNT" -gt 0 ]; then
+                CI_COMPLETED_AT=$(printf '%s\n%s\n' "$EXTERNAL_CHECK_UPDATED" "$STATUS_UPDATED" | sed '/^$/d' | sort | tail -1)
+                if [ -z "$CI_COMPLETED_AT" ]; then
+                  echo "::warning::Completed external CI for $HEAD_SHA has no completion timestamp"
+                  continue
+                fi
+                CI_MARKER="codex-ci-dispatched $HEAD_SHA $CI_COMPLETED_AT"
+                if ! COMMENTS=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body'); then
+                  echo "::warning::Could not inspect CI dispatch history for issue #$N"
+                  continue
+                fi
+                if ! printf '%s\n' "$COMMENTS" | grep -Fq "$CI_MARKER"; then
+                  if gh workflow run codex-build-trigger.yml -R "$R" \
+                    -f issue_number="$N" -f expected_label=codex-running; then
+                    gh issue comment "$N" -R "$R" --body "External CI completed for $HEAD_SHA — resuming convergence. <!-- $CI_MARKER -->"
+                    continue
+                  else
+                    echo "::error::Could not dispatch completed external CI for issue #$N"
+                    exit 1
+                  fi
+                fi
+              fi
             fi
 
             AGE=$(( ($(date +%s) - LAST_ACTIVITY_EPOCH) / 3600 ))
