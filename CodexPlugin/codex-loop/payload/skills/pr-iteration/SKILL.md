@@ -62,7 +62,7 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 
 ## Escalation (cap hit, repeated failure, or genuinely stuck)
 
-Post ONE comment on the PR containing: what fails, your diagnosis, what you tried (with commit refs), and your best hypothesis. Then stop. A stalled loop with a good diagnosis is a success condition, not a failure — burning iterations past the cap is the failure.
+Post ONE comment on the PR containing: what fails, your diagnosis, what you tried (with commit refs), and your best hypothesis. Then find the linked issue from the PR's `Closes #N`, post an issue escalation containing the diagnosis, attempts, commit refs, and specific questions, and replace `codex-running` with `codex-blocked`. Verify the issue has exactly the blocked terminal label before stopping. A stalled loop with a good diagnosis and a blocked issue is a success condition, not a failure — burning iterations past the cap or leaving the issue running is the failure.
 
 ## Never
 

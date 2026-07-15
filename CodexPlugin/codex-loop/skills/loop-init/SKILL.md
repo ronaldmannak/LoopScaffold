@@ -18,7 +18,7 @@ If AGENTS.md contains `<!-- codex-loop:start`, replace the complete marker-delim
 - Skills → `.agents/skills/`: copy each directory under `"$PAYLOAD"/skills/`.
 - Scripts → `.codex/scripts/`: copy all EXCEPT checks.sh, which is copied only if absent (per-repo config; never overwrite). `chmod +x .codex/scripts/*.sh`
 - Hooks → move the preflighted temporary file from step 1 to `.codex/hooks.json`. It contains the two current loop-owned `PreToolUse` hooks while preserving unrelated hook events/entries.
-- Workflows → `.github/workflows/`: copy the three codex-*.yml files. Tell the user to set their CI workflow name in codex-converge-trigger.yml (Actions CI only; Xcode Cloud repos delete the workflow_run trigger and rely on the sweep + review events).
+- Workflows → `.github/workflows/`: copy each codex-*.yml file only when its destination is absent. On update, never overwrite an existing workflow: show the diff against the payload template and ask the user to merge scaffold changes while preserving local configuration. In particular, preserve the configured CI workflow name in codex-converge-trigger.yml and any Xcode Cloud removal of its workflow_run trigger.
 
 ## 4. Seeds & GitHub
 - Swift repo without `.swift-version`: write `6.3.3`; Xcode projects must configure checks.sh BUILD/TEST arrays.

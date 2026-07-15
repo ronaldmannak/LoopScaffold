@@ -68,7 +68,7 @@ if $WITH_CONVERGER; then
     echo "    .github/workflows/claude-converge-trigger.yml exists — not touching it"
   else
     cp "$SRC/.claude/templates/claude-converge-trigger.yml" .github/workflows/
-    echo "    installed optional converge trigger — configure its workflow name and routine secrets"
+    echo "    installed optional converge trigger — configure its workflow name, routine secrets, and CLAUDE_RUNNER_LOGIN repo variable"
   fi
 fi
 chmod +x .claude/scripts/*.sh
@@ -135,7 +135,8 @@ cat << 'EOD'
      - Actions: done if you passed --with-actions-ci
      - Xcode Cloud: App Store Connect → workflow start condition =
        "Pull Request Changes" targeting main
-     - Optional split converger: configure it only if you passed --with-converger
+     - Optional split converger: if you passed --with-converger, configure its
+       workflow name, routine secrets, and CLAUDE_RUNNER_LOGIN repo variable
   4. Inspect existing branch/ruleset protection without changing it. If this
      repo has no merge gate, configure one manually in GitHub. Required checks
      appear only after reporting once, so a throwaway PR may be needed.

@@ -24,7 +24,7 @@
   2. **What changed** — 3–6 bullets, plain language.
   3. **Evidence** — the actual commands run and their output (test results, build status). Paste output, don't assert success.
   4. **Not done on purpose** — anything in or near scope that was intentionally skipped, and why.
-- Circuit breaker: if the same CI check fails 3 consecutive times after your fixes, STOP. Comment your diagnosis and what you tried on the PR, and end the run. Do not keep pushing.
+- Circuit breaker: if the same CI check fails 3 consecutive times after your fixes, STOP pushing. Comment your diagnosis and attempts on both the PR and linked issue, replace codex-running with codex-blocked, verify the issue's terminal label, and only then end the run.
 - Never force-push over commits you did not create in the current run.
 
 # Simplicity rules

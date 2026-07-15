@@ -6,7 +6,8 @@ cd "$ROOT"
 
 while IFS= read -r script; do bash -n "$script"; done < <(find . -type f -name '*.sh' ! -path './.git/*' | sort)
 while IFS= read -r json; do python3 -m json.tool "$json" >/dev/null; done < <(find . -type f -name '*.json' ! -path './.git/*' | sort)
-python3 - <<'PY'
+if python3 -c 'import yaml' >/dev/null 2>&1; then
+  python3 - <<'PY'
 from pathlib import Path
 import yaml
 
@@ -15,6 +16,9 @@ for pattern in ("*.yml", "*.yaml"):
         if ".git" not in path.parts:
             yaml.compose(path.read_text())
 PY
+else
+  echo "note: PyYAML unavailable; skipped YAML syntax validation" >&2
+fi
 
 python3 -m unittest discover -s tests -v
 

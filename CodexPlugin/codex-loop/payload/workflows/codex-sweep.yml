@@ -1,12 +1,12 @@
 name: Codex queue sweep
-# Pure label mechanics — no model needed. Hourly.
+# Pure recovery orchestration; model work is started through workflow_dispatch. Hourly.
 on:
   schedule: [{ cron: "17 * * * *" }]
   workflow_dispatch:
 jobs:
   sweep:
     runs-on: ubuntu-latest
-    permissions: { contents: read, issues: write, pull-requests: write }
+    permissions: { actions: write, contents: read, issues: write, pull-requests: write }
     env: { GH_TOKEN: "${{ github.token }}", R: "${{ github.repository }}" }
     steps:
       - name: Unpark merged dependencies
@@ -23,8 +23,12 @@ jobs:
                 -f owner="$OWNER" -f name="$NAME" -F number="$DEP" \
                 --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.mergedAt != null)] | length')
               if [ "$MERGED" -gt 0 ]; then
-                gh issue comment "$N" -R "$R" --body "Dependency #$DEP was closed by a merged PR — resuming."
-                gh issue edit "$N" -R "$R" --remove-label codex-blocked --add-label codex-build
+                if gh workflow run codex-build-trigger.yml -R "$R" -f issue_number="$N"; then
+                  gh issue comment "$N" -R "$R" --body "Dependency #$DEP was closed by a merged PR — resuming via workflow dispatch."
+                else
+                  echo "::error::Could not dispatch issue #$N; leaving it blocked for the next sweep"
+                  exit 1
+                fi
               fi
             fi
           done
@@ -43,8 +47,12 @@ jobs:
                 gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-blocked
                 gh issue comment "$N" -R "$R" --body "Second apparent dead run; needs a human look."
               else
-                gh issue comment "$N" -R "$R" --body "Previous run appears dead — retriggering. <!-- codex-dead-run-retry -->"
-                gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-build
+                if gh workflow run codex-build-trigger.yml -R "$R" -f issue_number="$N"; then
+                  gh issue comment "$N" -R "$R" --body "Previous run appears dead — retriggering via workflow dispatch. <!-- codex-dead-run-retry -->"
+                else
+                  echo "::error::Could not redispatch issue #$N; leaving it running for the next sweep"
+                  exit 1
+                fi
               fi
             fi
           done
@@ -55,7 +63,11 @@ jobs:
             N=$(gh pr view "$PR" -R "$R" --json body --jq .body | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
             [ -z "$N" ] && continue
             if [ "$M" = "CONFLICTING" ] && gh issue view "$N" -R "$R" --json labels --jq '.labels[].name' | grep -q codex-ready; then
-              gh issue comment "$N" -R "$R" --body "Base moved; sending back for rebase + reconvergence."
-              gh issue edit "$N" -R "$R" --remove-label codex-ready --add-label codex-build
+              if gh workflow run codex-build-trigger.yml -R "$R" -f issue_number="$N"; then
+                gh issue comment "$N" -R "$R" --body "Base moved; sending back for rebase + reconvergence via workflow dispatch."
+              else
+                echo "::error::Could not redispatch conflicted issue #$N; leaving it ready for the next sweep"
+                exit 1
+              fi
             fi
           done

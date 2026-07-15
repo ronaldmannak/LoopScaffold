@@ -22,7 +22,8 @@ set -uo pipefail
 # committed deny-hooks + branch protection = unattended runs that never
 # stall on an approval prompt, while local sessions keep prompting.
 mkdir -p ~/.claude
-python3 - "$HOME/.claude/settings.json" <<'PY'
+merge_sandbox_permissions() {
+  python3 - "$HOME/.claude/settings.json" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -55,6 +56,11 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
+}
+if ! merge_sandbox_permissions; then
+  echo "FATAL: could not merge sandbox permissions; refusing to continue with unattended setup" >&2
+  exit 1
+fi
 echo "==> Sandbox permissions merged (user scope, VM-only)"
 
 # Version resolution — minimum-bound semantics:

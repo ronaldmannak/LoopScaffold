@@ -132,6 +132,61 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertTrue((repo / log_directory).is_dir())
 
 
+class CloudSetupTests(unittest.TestCase):
+    def test_invalid_user_settings_stop_before_toolchain_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            settings = home / ".claude/settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text("{invalid")
+            env = dict(os.environ)
+            env["HOME"] = str(home)
+            result = subprocess.run(
+                ["/bin/bash", str(ROOT / "ClaudeCode-script/.claude/templates/cloud-setup-swift.sh")],
+                cwd=directory,
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("FATAL: could not merge sandbox permissions", result.stderr)
+            self.assertNotIn("Sandbox permissions merged", result.stdout)
+
+
+class ReviewRegressionTests(unittest.TestCase):
+    def test_yaml_validation_is_optional_without_pyyaml(self) -> None:
+        script = (ROOT / "scripts/test-scaffolds.sh").read_text()
+        self.assertIn("if python3 -c 'import yaml'", script)
+        self.assertIn("PyYAML unavailable; skipped YAML syntax validation", script)
+
+    def test_codex_converger_wakes_on_every_completed_ci_run(self) -> None:
+        workflow = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        self.assertIn("types: [completed]", workflow)
+        self.assertNotIn("conclusion == 'failure'", workflow)
+
+    def test_sweeper_uses_explicit_dispatch_instead_of_trigger_labels(self) -> None:
+        trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertIn("issue_number:", trigger)
+        self.assertIn("actions: write", sweep)
+        self.assertEqual(3, sweep.count("gh workflow run codex-build-trigger.yml"))
+        self.assertNotIn("--add-label codex-build", sweep)
+
+    def test_install_guidance_covers_managed_workflow_state(self) -> None:
+        claude_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
+        codex_skill = (ROOT / "CodexPlugin/codex-loop/skills/loop-init/SKILL.md").read_text()
+        installer = (ROOT / "ClaudeCode-script/install.sh").read_text()
+        self.assertIn(".github/workflows/claude-converge-trigger.yml", claude_skill)
+        self.assertIn("never overwrite an existing workflow", codex_skill)
+        self.assertIn("CLAUDE_RUNNER_LOGIN repo variable", installer)
+
+    def test_codex_escalation_blocks_the_linked_issue(self) -> None:
+        skill = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()
+        self.assertIn("replace `codex-running` with `codex-blocked`", skill)
+        self.assertIn("Verify the issue has exactly the blocked terminal label", skill)
+
+
 class InstallerTests(unittest.TestCase):
     def test_install_is_idempotent_and_preserves_settings_and_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
