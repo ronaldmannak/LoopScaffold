@@ -14,6 +14,7 @@ import os
 from pathlib import PurePosixPath
 import re
 import shlex
+import subprocess
 import sys
 
 try:
@@ -69,6 +70,68 @@ def protected_ref(argument: str) -> bool:
         ref = ref[len("refs/heads/"):]
     return ref in {"main", "master"}
 
+def push_refspecs(arguments: list[str]) -> list[str]:
+    takes_value = {"--receive-pack", "--exec", "-o", "--push-option"}
+    repository_from_option = False
+    positionals = []
+    index = 0
+    positional_only = False
+    while index < len(arguments):
+        token = arguments[index]
+        if positional_only:
+            positionals.append(token)
+            index += 1
+        elif token == "--":
+            positional_only = True
+            index += 1
+        elif token == "--repo":
+            repository_from_option = True
+            index += 2
+        elif token.startswith("--repo="):
+            repository_from_option = True
+            index += 1
+        elif token in takes_value:
+            index += 2
+        elif token.startswith("-"):
+            index += 1
+        else:
+            positionals.append(token)
+            index += 1
+    return positionals if repository_from_option else positionals[1:]
+
+def git_output(prefix: list[str], *arguments: str) -> str:
+    try:
+        result = subprocess.run(
+            [*prefix, *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+def protected_tracking_ref(reference: str) -> bool:
+    ref = reference.strip()
+    if ref.startswith("refs/remotes/"):
+        ref = ref[len("refs/remotes/"):]
+        ref = ref.split("/", 1)[1] if "/" in ref else ref
+    elif ref.startswith("refs/heads/"):
+        ref = ref[len("refs/heads/"):]
+    elif "/" in ref:
+        ref = ref.split("/", 1)[1]
+    return ref in {"main", "master"}
+
+def implicit_push_targets_protected(prefix: list[str]) -> bool:
+    branch = git_output(prefix, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if protected_ref(branch):
+        return True
+    return any(
+        protected_tracking_ref(git_output(prefix, "rev-parse", "--abbrev-ref", "--symbolic-full-name", selector))
+        for selector in ("@{push}", "@{upstream}")
+    )
+
 def test_path(argument: str) -> bool:
     if argument.startswith("-"):
         return False
@@ -114,7 +177,16 @@ for index, token in enumerate(tokens):
         if subcommand == "push":
             if any(arg in {"-f", "--force"} or arg.startswith("--force-with-lease") for arg in arguments):
                 block("force push")
-            if any(protected_ref(arg) for arg in arguments if not arg.startswith("--")):
+            if any(arg in {"--all", "--branches", "--mirror"} for arg in arguments):
+                block("push to main")
+            refspecs = push_refspecs(arguments)
+            if any(protected_ref(arg) for arg in refspecs):
+                block("push to main")
+            needs_branch_context = (
+                (not refspecs and "--tags" not in arguments)
+                or any(arg.lstrip("+") in {"HEAD", "@"} for arg in refspecs)
+            )
+            if needs_branch_context and implicit_push_targets_protected(tokens[index:sub_index]):
                 block("push to main")
         elif subcommand == "reset" and "--hard" in arguments:
             block("hard reset")

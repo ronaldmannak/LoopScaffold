@@ -53,6 +53,17 @@ def invoke_hook(
     )
 
 
+def codex_update_payload(path: str, old: str, new: str) -> dict[str, object]:
+    lines = ["*** Begin Patch", f"*** Update File: {path}", "@@"]
+    lines.extend(f"-{line}" for line in old.splitlines())
+    lines.extend(f"+{line}" for line in new.splitlines())
+    lines.append("*** End Patch")
+    return {
+        "tool_name": "apply_patch",
+        "tool_input": {"command": "\n".join(lines) + "\n"},
+    }
+
+
 class SettingsMergeTests(unittest.TestCase):
     def test_helpers_do_not_drift(self) -> None:
         self.assertEqual(CLAUDE_HELPER.read_bytes(), PLUGIN_HELPER.read_bytes())
@@ -182,13 +193,13 @@ class PolicyHookTests(unittest.TestCase):
 
     def test_entire_policy_trees_are_protected(self) -> None:
         cases = (
-            (PROTECT_HOOKS[0], ".claude/agents/reviewer.md"),
-            (PROTECT_HOOKS[1], ".claude/skills/verification/SKILL.md"),
-            (PROTECT_HOOKS[2], ".agents/skills/verification/SKILL.md"),
+            (PROTECT_HOOKS[0], {"tool_input": {"file_path": ".claude/agents/reviewer.md", "new_string": "x"}}),
+            (PROTECT_HOOKS[1], {"tool_input": {"file_path": ".claude/skills/verification/SKILL.md", "new_string": "x"}}),
+            (PROTECT_HOOKS[2], codex_update_payload(".agents/skills/verification/SKILL.md", "old", "new")),
         )
-        for (product, hook), path in cases:
+        for (product, hook), payload in cases:
             with self.subTest(product=product):
-                result = invoke_hook(hook, {"tool_input": {"file_path": path, "new_string": "x"}})
+                result = invoke_hook(hook, payload)
                 self.assertEqual(2, result.returncode)
 
     def test_lowercase_tests_and_whole_file_writes_cannot_remove_assertions(self) -> None:
@@ -200,18 +211,86 @@ class PolicyHookTests(unittest.TestCase):
                 test.write_text("def test_feature():\n    assert feature()\n", encoding="utf-8")
                 env = dict(os.environ)
                 env["CLAUDE_PROJECT_DIR"] = str(repo)
+                payload = (
+                    codex_update_payload(
+                        "tests/test_feature.py",
+                        "    assert feature()",
+                        "    pass",
+                    )
+                    if product == "codex"
+                    else {"tool_input": {
+                        "file_path": "tests/test_feature.py",
+                        "content": "def test_feature():\n    pass\n",
+                    }}
+                )
                 result = invoke_hook(
                     hook,
-                    {"tool_input": {"file_path": "tests/test_feature.py", "content": "def test_feature():\n    pass\n"}},
+                    payload,
                     cwd=repo,
                     env=env,
                 )
                 self.assertEqual(2, result.returncode)
                 self.assertIn("removes assertions", result.stderr)
 
+    def test_unittest_assertion_methods_cannot_be_removed(self) -> None:
+        for product, hook in PROTECT_HOOKS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                test = repo / "tests/test_feature.py"
+                test.parent.mkdir()
+                test.write_text(
+                    "class FeatureTests(unittest.TestCase):\n"
+                    "    def test_feature(self):\n"
+                    "        self.assertEqual(actual, expected)\n",
+                    encoding="utf-8",
+                )
+                env = dict(os.environ)
+                env["CLAUDE_PROJECT_DIR"] = str(repo)
+                payload = (
+                    codex_update_payload(
+                        "tests/test_feature.py",
+                        "        self.assertEqual(actual, expected)",
+                        "        pass",
+                    )
+                    if product == "codex"
+                    else {"tool_input": {
+                        "file_path": "tests/test_feature.py",
+                        "content": (
+                            "class FeatureTests(unittest.TestCase):\n"
+                            "    def test_feature(self):\n"
+                            "        pass\n"
+                        ),
+                    }}
+                )
+                result = invoke_hook(hook, payload, cwd=repo, env=env)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("removes assertions", result.stderr)
+
+    def test_codex_apply_patch_blocks_workflow_edits_and_test_deletions(self) -> None:
+        product, hook = PROTECT_HOOKS[2]
+        workflow = codex_update_payload(".github/workflows/ci.yml", "name: CI", "name: Bypass")
+        with self.subTest(product=product, operation="workflow"):
+            result = invoke_hook(hook, workflow)
+            self.assertEqual(2, result.returncode)
+            self.assertIn("policy/CI file", result.stderr)
+
+        delete_test = {
+            "tool_name": "apply_patch",
+            "tool_input": {"command": (
+                "*** Begin Patch\n"
+                "*** Delete File: tests/test_feature.py\n"
+                "*** End Patch\n"
+            )},
+        }
+        with self.subTest(product=product, operation="delete-test"):
+            result = invoke_hook(hook, delete_test)
+            self.assertEqual(2, result.returncode)
+            self.assertIn("deleting test files", result.stderr)
+
     def test_bash_guards_cover_git_options_refspecs_and_test_deletions(self) -> None:
         blocked = (
             "git -C elsewhere push --force origin main",
+            "git push --all",
             "git push origin +main",
             "git push origin feature:main",
             "git push origin HEAD:refs/heads/master",
@@ -228,6 +307,34 @@ class PolicyHookTests(unittest.TestCase):
             self.assertEqual(0, safe.returncode)
             non_test = invoke_hook(hook, {"tool_input": {"command": "rm Sources/Contest.swift"}})
             self.assertEqual(0, non_test.returncode)
+
+    def test_bash_guards_block_implicit_pushes_from_protected_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            run("git", "init", "-q", "-b", "main", repo)
+            implicit = ("git push", "git push origin", "git push origin HEAD")
+            for product, hook in GUARD_HOOKS:
+                for command in implicit:
+                    with self.subTest(product=product, branch="main", command=command):
+                        result = invoke_hook(hook, {"tool_input": {"command": command}}, cwd=repo)
+                        self.assertEqual(2, result.returncode)
+
+            run("git", "switch", "-q", "-c", "feature", cwd=repo)
+            for product, hook in GUARD_HOOKS:
+                for command in implicit:
+                    with self.subTest(product=product, branch="feature", command=command):
+                        result = invoke_hook(hook, {"tool_input": {"command": command}}, cwd=repo)
+                        self.assertEqual(0, result.returncode)
+
+            run("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "test", cwd=repo)
+            run("git", "remote", "add", "origin", "https://example.invalid/repo.git", cwd=repo)
+            run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+            run("git", "branch", "--set-upstream-to=origin/main", "feature", cwd=repo)
+            run("git", "config", "push.default", "upstream", cwd=repo)
+            for product, hook in GUARD_HOOKS:
+                with self.subTest(product=product, branch="feature-to-main-upstream"):
+                    result = invoke_hook(hook, {"tool_input": {"command": "git push"}}, cwd=repo)
+                    self.assertEqual(2, result.returncode)
 
 
 class CloudSetupTests(unittest.TestCase):
@@ -264,15 +371,18 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("types: [completed]", workflow)
         self.assertNotIn("conclusion == 'failure'", workflow)
 
-    def test_codex_uses_the_supported_action_for_build_and_convergence(self) -> None:
+    def test_codex_uses_repository_connected_cloud_tasks_without_an_api_key(self) -> None:
         trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
         converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
-        self.assertIn("uses: openai/codex-action@v1", trigger)
-        self.assertIn("openai-api-key: ${{ secrets.OPENAI_API_KEY }}", trigger)
-        self.assertIn("allow-bots: github-actions[bot]", trigger)
+        self.assertIn("@codex Implement issue", trigger)
+        self.assertNotIn("openai/codex-action", trigger)
+        self.assertNotIn("OPENAI_API_KEY", trigger)
+        self.assertNotIn("openai-api-key", trigger)
+        self.assertIn("issues: write", trigger)
+        self.assertNotIn("contents: write", trigger)
+        self.assertNotIn("pull-requests: write", trigger)
         self.assertIn("expected_label:", trigger)
         self.assertIn("gh workflow run codex-build-trigger.yml", converge)
-        self.assertNotIn("@codex", trigger)
         self.assertNotIn("@codex", converge)
         self.assertNotIn("CODEX_RUNNER_LOGIN", converge)
 
@@ -353,7 +463,9 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn(".github/workflows/claude-converge-trigger.yml", claude_skill)
         self.assertIn("never overwrite an existing workflow", codex_skill)
         self.assertIn("CLAUDE_RUNNER_LOGIN repo variable", installer)
-        self.assertIn("OPENAI_API_KEY", codex_skill)
+        self.assertIn("Set up Codex cloud", codex_skill)
+        self.assertIn("@codex", codex_skill)
+        self.assertNotIn("OPENAI_API_KEY", codex_skill)
         self.assertNotIn("CODEX_RUNNER_LOGIN", codex_skill)
 
     def test_codex_escalation_blocks_the_linked_issue(self) -> None:

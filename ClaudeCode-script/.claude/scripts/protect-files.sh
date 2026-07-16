@@ -61,7 +61,7 @@ if "content" in tool_input and edits[0].get("old_string", "") == "":
 skip_pattern = re.compile(
     r"XCTSkip|\bxit\s*\(|\bxdescribe\s*\(|\.skip\s*\(|@Disabled|@Ignore\b|it\.todo|continue-on-error"
 )
-assert_pattern = re.compile(r"XCTAssert|#expect|XCTFail|\bexpect\s*\(|\bassert\b")
+assert_pattern = re.compile(r"XCTAssert|#expect|XCTFail|\bexpect\s*\(|\bassert(?:\b|[A-Z_])")
 
 for edit in edits:
     old = edit.get("old_string", "") or ""
