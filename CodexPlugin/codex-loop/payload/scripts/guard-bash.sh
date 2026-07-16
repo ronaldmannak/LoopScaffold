@@ -186,6 +186,36 @@ def shell_uses_command_string(arguments: list[str]) -> bool:
             return True
     return False
 
+def has_active_dynamic_evaluation(source: str) -> bool:
+    """Detect shell constructs that can execute commands hidden from shlex."""
+    quote = ""
+    escaped = False
+    for index, character in enumerate(source):
+        if quote == "'":
+            if character == "'":
+                quote = ""
+            continue
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if character == "'" and not quote:
+            quote = "'"
+            continue
+        if character == '"':
+            quote = "" if quote == '"' else '"'
+            continue
+        if character == "`":
+            return True
+        if character == "$" and source[index + 1:index + 2] == "(":
+            if source[index + 2:index + 3] != "(":
+                return True
+        if not quote and character in "<>" and source[index + 1:index + 2] == "(":
+            return True
+    return False
+
 def block(label: str):
     sys.stderr.write(
         f"BLOCKED ({label}): {command.strip()[:200]}\n"
@@ -193,10 +223,15 @@ def block(label: str):
     )
     sys.exit(2)
 
+if has_active_dynamic_evaluation(command):
+    block("dynamic shell evaluation")
+
 for index, token in enumerate(tokens):
     name = executable(token)
     end = command_end(index + 1)
-    if name == "git":
+    if name == "eval":
+        block("dynamic shell evaluation")
+    elif name == "git":
         subcommand, sub_index = git_subcommand(index, end)
         arguments = tokens[sub_index + 1:end]
         if subcommand == "push":

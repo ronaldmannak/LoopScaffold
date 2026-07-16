@@ -385,6 +385,30 @@ class PolicyHookTests(unittest.TestCase):
                     self.assertEqual(2, result.returncode)
                     self.assertIn("nested shell command", result.stderr)
 
+    def test_bash_guards_block_dynamic_shell_evaluation(self) -> None:
+        blocked = (
+            "echo $(git push --force origin main)",
+            "x=`gh pr merge 1`",
+            'eval "git push --force origin main"',
+            "cat <(rm -rf tests)",
+        )
+        safe = (
+            "printf %s '$(git push --force origin main)'",
+            "printf %s '`gh pr merge 1`'",
+            r"echo \$(git push --force origin main)",
+            "echo $((1 + 2))",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, blocked=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("dynamic shell evaluation", result.stderr)
+            for command in safe:
+                with self.subTest(product=product, safe=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(0, result.returncode)
+
     def test_bash_guards_block_implicit_pushes_from_protected_branches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
