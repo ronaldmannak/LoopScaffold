@@ -351,6 +351,19 @@ class PolicyHookTests(unittest.TestCase):
             non_test = invoke_hook(hook, {"tool_input": {"command": "rm Sources/Contest.swift"}})
             self.assertEqual(0, non_test.returncode)
 
+    def test_bash_guards_block_opaque_nested_shell_commands(self) -> None:
+        blocked = (
+            'bash -c "git push --force origin main"',
+            'bash -lc "gh pr merge 42"',
+            '/bin/zsh -c "rm -rf tests"',
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, command=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("nested shell command", result.stderr)
+
     def test_bash_guards_block_implicit_pushes_from_protected_branches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
@@ -533,6 +546,32 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn('"$RESUMED_LINE" -gt "$WAIT_LINE"', codex)
         self.assertIn("most recent", claude)
         self.assertIn("claude-dependency-resumed #<x>", claude)
+
+    def test_claude_dead_run_recovery_requires_stale_issue_activity(self) -> None:
+        sweep = (ROOT / "ClaudeCodePlugin/claude-loop/payload/SWEEP_ROUTINE_PROMPT.md").read_text()
+        self.assertIn("issue itself has had no activity", sweep)
+        self.assertIn("including label or comment activity", sweep)
+        self.assertIn("A missing branch or PR never overrides the issue-age", sweep)
+
+    def test_codex_setup_requires_developer_confirmed_ci(self) -> None:
+        skill = (ROOT / "CodexPlugin/codex-loop/skills/loop-init/SKILL.md").read_text()
+        readme = (ROOT / "CodexPlugin/codex-loop/README.md").read_text()
+        self.assertIn("CI is developer-provided; never install or overwrite a CI workflow", skill)
+        self.assertIn("stop before the smoke test", skill)
+        self.assertIn("Do not continue to the smoke test until a CI producer is confirmed", skill)
+        self.assertIn("CI is a developer-configured precondition", readme)
+        self.assertIn("does not create or\noverwrite the project's CI workflow", readme)
+
+    def test_swift_actions_template_uses_editable_6_3_default(self) -> None:
+        for path in (
+            "ClaudeCode-script/.claude/templates/ci-github-actions.yml",
+            "ClaudeCodePlugin/claude-loop/payload/templates/ci-github-actions.yml",
+        ):
+            with self.subTest(path=path):
+                template = (ROOT / path).read_text()
+                self.assertIn("container: swift:6.3", template)
+                self.assertIn("editable default; match your project toolchain", template)
+                self.assertNotIn("container: swift:6.0", template)
 
     def test_policy_issues_are_created_without_build_labels(self) -> None:
         paths = (

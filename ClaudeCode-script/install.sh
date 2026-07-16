@@ -93,7 +93,7 @@ if $WITH_CI; then
     echo "    .github/workflows/ci.yml exists — not touching it"
   else
     cp .claude/templates/ci-github-actions.yml .github/workflows/ci.yml
-    echo "    installed .github/workflows/ci.yml — pick variant A or B inside it"
+    echo "    installed .github/workflows/ci.yml — pick a variant and edit swift:6.3 if the project uses another toolchain"
   fi
 fi
 

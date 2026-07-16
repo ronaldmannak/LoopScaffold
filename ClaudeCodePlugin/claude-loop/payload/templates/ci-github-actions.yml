@@ -10,7 +10,7 @@ jobs:
   # ---- Variant A: SwiftPM / Linux-compatible (cheap, fast) ----
   checks:
     runs-on: ubuntu-latest
-    container: swift:6.0            # match your toolchain
+    container: swift:6.3            # editable default; match your project toolchain
     steps:
       - uses: actions/checkout@v4
       - run: chmod +x .claude/scripts/checks.sh && .claude/scripts/checks.sh

@@ -26,7 +26,7 @@ Install (or refresh) the loop scaffolding from this plugin's payload into the cu
 
 ## 4. GitHub side (needs gh auth; skip with a note if unavailable)
 - Labels, idempotent: inspect each of `claude-build`, `claude-running`, `claude-ready`, and `claude-blocked`; create only missing labels. Report authorization/repository failures distinctly—never treat every failed create as proof that a label exists.
-- Ask the user (do not assume) whether to copy `.claude/templates/ci-github-actions.yml` to `.github/workflows/ci.yml` — only for repos using GitHub Actions CI (Xcode Cloud repos skip it).
+- Ask the user (do not assume) whether to copy `.claude/templates/ci-github-actions.yml` to `.github/workflows/ci.yml` — only for repos using GitHub Actions CI (Xcode Cloud repos skip it). The template's editable default is `swift:6.3`; tell the developer to change the YAML when the project uses another toolchain.
 - Inspect existing branch/ruleset protection without mutating it. If the repo has no merge gate, remind the user to configure PR + passing-check requirements manually; checks appear in the dropdown only after reporting once.
 
 ## 5. Commit

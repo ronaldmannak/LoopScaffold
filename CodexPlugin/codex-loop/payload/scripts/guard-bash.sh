@@ -176,6 +176,16 @@ def push_uses_force(arguments: list[str]) -> bool:
                 break  # The remainder is --push-option's value, not a flag cluster.
     return False
 
+def shell_uses_command_string(arguments: list[str]) -> bool:
+    for argument in arguments:
+        if argument == "--":
+            break
+        if argument == "-c":
+            return True
+        if argument.startswith("-") and not argument.startswith("--") and "c" in argument[1:]:
+            return True
+    return False
+
 def block(label: str):
     sys.stderr.write(
         f"BLOCKED ({label}): {command.strip()[:200]}\n"
@@ -219,6 +229,8 @@ for index, token in enumerate(tokens):
             block("PR merge (human-only)")
     elif name == "rm" and any(test_path(arg) for arg in tokens[index + 1:end]):
         block("deleting test files")
+    elif name in {"bash", "dash", "ksh", "sh", "zsh"} and shell_uses_command_string(tokens[index + 1:end]):
+        block("nested shell command")
 
 sys.exit(0)
 PY

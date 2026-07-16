@@ -18,9 +18,11 @@ schedule; act on CURRENT state only, make at most 3 relabels per run
    and re-converges).
 
 3. RECOVER DEAD RUNS: for each open issue labeled claude-running where the
-   matching claude/issue-<n>-* branch has no commits in the last 2 hours
-   AND its PR (if any) has no activity in the last 2 hours: the run likely
-   died. If no prior dead-run comment exists on the issue: comment
+   issue itself has had no activity (including label or comment activity) in
+   the last 2 hours, the matching claude/issue-<n>-* branch has no commits in
+   the last 2 hours, AND its PR (if any) has no activity in the last 2 hours:
+   the run likely died. A missing branch or PR never overrides the issue-age
+   requirement. If no prior dead-run comment exists on the issue: comment
    "Previous run appears to have died — retriggering. <!-- claude-dead-run-retry -->"
    and swap claude-running -> claude-build (Step 0's resume continues the
    existing branch). If a claude-dead-run-retry comment ALREADY exists:

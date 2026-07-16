@@ -24,6 +24,12 @@ wakes into a single follow-up, so independent cloud tasks cannot write the same
 branch concurrently. Repositories with multiple CI providers list every exact
 required context in `EXPECTED_CI_CHECKS` inside checks.sh.
 
+CI is a developer-configured precondition, not part of this scaffold. Confirm
+that GitHub Actions or Xcode Cloud/external CI runs for pull requests and
+reports the context the loop watches before labeling the first issue. The
+installer verifies or asks for that confirmation; it does not create or
+overwrite the project's CI workflow.
+
 Install the plugin, run $loop-init in a repo, follow the printed steps.
 Labels codex-* and branches codex/* — designed to coexist with
 claude-loop in the same repository for side-by-side agent comparison.
