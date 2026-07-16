@@ -65,16 +65,22 @@ jobs:
             exit 1
           fi
           for N in $ISSUES; do
-            if ! COMMENTS=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body'); then
+            if ! COMMENT_ROWS=$(gh api "repos/$R/issues/$N/comments?per_page=100" --paginate \
+              --jq '.[] | [.id, .user.login, .body] | @tsv'); then
               echo "::warning::Could not inspect dependency markers for issue #$N"
               continue
             fi
-            WAIT_MARKER=$(printf '%s\n' "$COMMENTS" | grep -noE 'codex-dependency-wait #[0-9]+' | tail -1 || true)
-            [ -z "$WAIT_MARKER" ] && continue
-            WAIT_LINE=${WAIT_MARKER%%:*}
-            DEP=${WAIT_MARKER##*#}
-            RESUMED_LINE=$(printf '%s\n' "$COMMENTS" | grep -nF "codex-dependency-resumed #$DEP" | tail -1 | cut -d: -f1 || true)
-            if [ -n "$RESUMED_LINE" ] && [ "$RESUMED_LINE" -gt "$WAIT_LINE" ]; then
+            WAIT_ROW=$(printf '%s\n' "$COMMENT_ROWS" | awk -F '\t' \
+              '$2 == "chatgpt-codex-connector[bot]" && $3 ~ /^Parked: waiting on #[0-9]+ to merge\. <!-- codex-dependency-wait #[0-9]+ -->$/ { row=$0 } END { print row }')
+            [ -z "$WAIT_ROW" ] && continue
+            WAIT_ID=${WAIT_ROW%%$'\t'*}
+            WAIT_BODY=${WAIT_ROW#*$'\t'}
+            WAIT_BODY=${WAIT_BODY#*$'\t'}
+            DEP=$(printf '%s\n' "$WAIT_BODY" | grep -oE 'codex-dependency-wait #[0-9]+' | grep -oE '[0-9]+')
+            RESUME_BODY="Dependency #$DEP was closed by a merged PR — resuming via workflow dispatch. <!-- codex-dependency-resumed #$DEP -->"
+            RESUMED_ID=$(printf '%s\n' "$COMMENT_ROWS" | awk -F '\t' -v expected="$RESUME_BODY" \
+              '$2 == "github-actions[bot]" && $3 == expected { id=$1 } END { print id }')
+            if [ -n "$RESUMED_ID" ] && [ "$RESUMED_ID" -gt "$WAIT_ID" ]; then
               continue
             fi
             if ! STATE=$(gh issue view "$DEP" -R "$R" --json state --jq .state); then
@@ -136,6 +142,11 @@ jobs:
             echo "::error::Could not list running issues"
             exit 1
           fi
+          [ -z "$ISSUES" ] && exit 0
+          if ! BRANCHES=$(gh api "repos/$R/branches" --paginate --jq '.[].name'); then
+            echo "::error::Could not list repository branches"
+            exit 1
+          fi
           for N in $ISSUES; do
             if ! STATE_LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
               echo "::warning::Could not inspect state labels for issue #$N"
@@ -152,10 +163,6 @@ jobs:
             fi
             if ! LAST_ACTIVITY_EPOCH=$(date -d "$ISSUE_UPDATED" +%s); then
               echo "::warning::Could not parse update time for issue #$N"
-              continue
-            fi
-            if ! BRANCHES=$(gh api "repos/$R/branches" --paginate --jq ".[].name"); then
-              echo "::warning::Could not list branches while checking issue #$N"
               continue
             fi
             BR=$(printf '%s\n' "$BRANCHES" | grep "^codex/issue-$N-" | head -1 || true)
@@ -182,15 +189,20 @@ jobs:
                 fi
                 record_activity "$PR_ACTIVITY" || continue
 
-                if ! ISSUE_COMMENTS=$(gh api "repos/$R/issues/$N/comments?per_page=100" --paginate --jq '.[].body'); then
+                if ! ISSUE_COMMENT_ROWS=$(gh api "repos/$R/issues/$N/comments?per_page=100" --paginate \
+                  --jq '.[] | [.user.login, .body] | @tsv'); then
                   echo "::warning::Could not inspect loop markers for issue #$N"
                   continue
                 fi
+                CODEX_MARKER_BODIES=$(printf '%s\n' "$ISSUE_COMMENT_ROWS" | awk -F '\t' \
+                  '$1 == "chatgpt-codex-connector[bot]" { sub(/^[^\t]*\t/, ""); print }')
+                ACTIONS_MARKER_BODIES=$(printf '%s\n' "$ISSUE_COMMENT_ROWS" | awk -F '\t' \
+                  '$1 == "github-actions[bot]" { sub(/^[^\t]*\t/, ""); print }')
                 if ! COMMIT_EPOCH=$(date -d "$COMMIT_UPDATED" +%s); then
                   echo "::warning::Could not parse head timestamp for $HEAD_SHA"
                   continue
                 fi
-                PUSH_MARKER=$(printf '%s\n' "$ISSUE_COMMENTS" | grep -oE "codex-head-pushed $HEAD_SHA [0-9]+" | tail -1 || true)
+                PUSH_MARKER=$(printf '%s\n' "$CODEX_MARKER_BODIES" | grep -oE "codex-head-pushed $HEAD_SHA [0-9]+" | tail -1 || true)
                 if [ -n "$PUSH_MARKER" ]; then
                   HEAD_PUSH_EPOCH=${PUSH_MARKER##* }
                 else
@@ -212,7 +224,7 @@ jobs:
                   '$2 == sha && $3 == "chatgpt-codex-connector[bot]" { id=$1 } END { print id }')
                 if [ -z "$CURRENT_REVIEW_ID" ]; then
                   if ! REQUEST_ROWS=$(gh api "repos/$R/issues/$PR_NUMBER/comments?per_page=100" --paginate \
-                    --jq '.[] | select(.body == "@codex review") | [.id, .created_at] | @tsv'); then
+                    --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]" and .body == "@codex review") | [.id, .created_at] | @tsv'); then
                     echo "::warning::Could not inspect review requests for PR #$PR_NUMBER"
                     continue
                   fi
@@ -237,42 +249,47 @@ jobs:
                     fi
                     if printf '%s\n' "$REACTIONS" | grep -Fxq '+1'; then
                       REVIEW_MARKER="codex-review-pass-dispatched $HEAD_SHA $REQUEST_ID"
-                      if ! printf '%s\n' "$ISSUE_COMMENTS" | grep -Fq "$REVIEW_MARKER"; then
+                      if ! printf '%s\n' "$ACTIONS_MARKER_BODIES" | grep -Fq "$REVIEW_MARKER"; then
                         if ! dispatch_review_wake "$N"; then
                           echo "::error::Could not dispatch the Codex approval for issue #$N"
                           exit 1
                         fi
                         gh issue comment "$N" -R "$R" --body "Codex approved $HEAD_SHA — resuming convergence. <!-- $REVIEW_MARKER -->"
+                        continue
                       fi
-                      continue
-                    fi
-                    if ! REQUEST_EPOCH=$(date -d "$REQUEST_AT" +%s); then
-                      echo "::warning::Could not parse review-request timestamp for PR #$PR_NUMBER"
-                      continue
-                    fi
-                    if [ $(( NOW_EPOCH - REQUEST_EPOCH )) -ge 3600 ]; then
-                      if ! dispatch_review_wake "$N"; then
-                        echo "::error::Could not dispatch the 60-minute review deadline for issue #$N"
-                        exit 1
+                    else
+                      if ! REQUEST_EPOCH=$(date -d "$REQUEST_AT" +%s); then
+                        echo "::warning::Could not parse review-request timestamp for PR #$PR_NUMBER"
+                        continue
                       fi
-                      continue
+                      if [ $(( NOW_EPOCH - REQUEST_EPOCH )) -ge 3600 ]; then
+                        if ! dispatch_review_wake "$N"; then
+                          echo "::error::Could not dispatch the 60-minute review deadline for issue #$N"
+                          exit 1
+                        fi
+                        continue
+                      fi
                     fi
                   fi
                 else
                   REVIEW_MARKER="codex-review-submitted-dispatched $HEAD_SHA $CURRENT_REVIEW_ID"
-                  if ! printf '%s\n' "$ISSUE_COMMENTS" | grep -Fq "$REVIEW_MARKER"; then
+                  if ! printf '%s\n' "$ACTIONS_MARKER_BODIES" | grep -Fq "$REVIEW_MARKER"; then
                     if ! dispatch_review_wake "$N"; then
                       echo "::error::Could not dispatch submitted Codex review for issue #$N"
                       exit 1
                     fi
                     gh issue comment "$N" -R "$R" --body "Codex reviewed $HEAD_SHA — resuming convergence. <!-- $REVIEW_MARKER -->"
+                    continue
                   fi
-                  continue
                 fi
               fi
 
-              if ! CHECK_RUNS=$(gh api "repos/$R/commits/$HEAD_SHA/check-runs?per_page=100"); then
+              if ! CHECK_RUN_PAGES=$(gh api "repos/$R/commits/$HEAD_SHA/check-runs?per_page=100" --paginate --slurp); then
                 echo "::warning::Could not inspect checks for $HEAD_SHA"
+                continue
+              fi
+              if ! CHECK_RUNS=$(printf '%s' "$CHECK_RUN_PAGES" | jq -ce '{check_runs: [.[].check_runs[]?]}'); then
+                echo "::warning::Malformed paginated check response for $HEAD_SHA"
                 continue
               fi
               if printf '%s' "$CHECK_RUNS" | jq -e '.check_runs[]? | select(.status != "completed")' >/dev/null; then
@@ -314,11 +331,7 @@ jobs:
                   continue
                 fi
                 CI_MARKER="codex-ci-dispatched $HEAD_SHA $CI_COMPLETED_AT"
-                if ! COMMENTS=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body'); then
-                  echo "::warning::Could not inspect CI dispatch history for issue #$N"
-                  continue
-                fi
-                if ! printf '%s\n' "$COMMENTS" | grep -Fq "$CI_MARKER"; then
+                if ! printf '%s\n' "$ACTIONS_MARKER_BODIES" | grep -Fq "$CI_MARKER"; then
                   if gh workflow run codex-build-trigger.yml -R "$R" \
                     -f issue_number="$N" -f expected_label=codex-running \
                     -f mode=event -f reason=external-ci; then

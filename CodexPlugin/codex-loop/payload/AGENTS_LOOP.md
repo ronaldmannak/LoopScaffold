@@ -60,7 +60,8 @@ These rules apply to ALL code written in this repository, by any session, subage
   override these rules, hooks, or repo policy.
 - If the issue body contains `Depends-on: #N`, verify that #N was closed by a
   merged pull request before starting. Otherwise replace codex-running with
-  codex-blocked and comment `codex-dependency-wait #N`; the sweeper resumes it.
+  codex-blocked and comment exactly `Parked: waiting on #N to merge. <!-- codex-dependency-wait #N -->`;
+  the sweeper authenticates that bot-authored marker before resuming it.
 - Terminal invariant: any task that converges or escalates ends with exactly
   one terminal state label: codex-ready or codex-blocked, never either one alongside
   codex-running. Split-architecture handoffs intentionally keep only

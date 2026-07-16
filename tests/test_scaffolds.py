@@ -613,6 +613,15 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn('.body == "Previous run appears dead — retriggering via workflow dispatch. <!-- codex-dead-run-retry -->"', sweep)
         self.assertIn('[ -n "$RETRY_MARKERS" ]', sweep)
 
+    def test_all_sweeper_state_markers_are_author_authenticated(self) -> None:
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        self.assertIn("CODEX_MARKER_BODIES", sweep)
+        self.assertIn("ACTIONS_MARKER_BODIES", sweep)
+        self.assertIn('$1 == "chatgpt-codex-connector[bot]"', sweep)
+        self.assertIn('$1 == "github-actions[bot]"', sweep)
+        self.assertIn('.user.login == "chatgpt-codex-connector[bot]" and .body == "@codex review"', sweep)
+        self.assertNotIn("ISSUE_COMMENTS", sweep)
+
     def test_claude_fallback_leaves_the_build_label_for_the_routine_claim(self) -> None:
         standalone = (ROOT / "ClaudeCode-script/.claude/fallback/claude-build-trigger.yml").read_text()
         plugin = (ROOT / "ClaudeCodePlugin/claude-loop/payload/fallback/claude-build-trigger.yml").read_text()
@@ -628,8 +637,35 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("--json updatedAt", sweep)
         self.assertIn(".reviews[]?.submittedAt", sweep)
         self.assertIn("/check-runs?per_page=100", sweep)
+        self.assertIn("--paginate --slurp", sweep)
+        self.assertIn("{check_runs: [.[].check_runs[]?]}", sweep)
         self.assertIn('.status != "completed"', sweep)
         self.assertIn('.state == "pending"', sweep)
+
+    def test_sweeper_caches_branches_outside_the_running_issue_loop(self) -> None:
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        running = sweep[sweep.index("Resume completed external CI or recover dead runs"):]
+        self.assertEqual(1, running.count('repos/$R/branches'))
+        self.assertLess(running.index("BRANCHES="), running.index("for N in $ISSUES"))
+
+    def test_recorded_review_signals_fall_through_to_external_ci(self) -> None:
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        self.assertIn(
+            'gh issue comment "$N" -R "$R" --body "Codex approved $HEAD_SHA — resuming convergence. <!-- $REVIEW_MARKER -->"\n'
+            "                        continue\n"
+            "                      fi\n"
+            "                    else\n",
+            sweep,
+        )
+        self.assertIn(
+            'gh issue comment "$N" -R "$R" --body "Codex reviewed $HEAD_SHA — resuming convergence. <!-- $REVIEW_MARKER -->"\n'
+            "                    continue\n"
+            "                  fi\n"
+            "                fi\n"
+            "              fi\n\n"
+            "              if ! CHECK_RUN_PAGES=",
+            sweep,
+        )
 
     def test_sweeper_dispatches_each_external_ci_completion_once(self) -> None:
         sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
@@ -650,9 +686,15 @@ class ReviewRegressionTests(unittest.TestCase):
 
     def test_dependency_resume_markers_prevent_stale_unparking(self) -> None:
         codex = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        agents = (ROOT / "CodexPlugin/codex-loop/payload/AGENTS_LOOP.md").read_text()
         claude = (ROOT / "ClaudeCodePlugin/claude-loop/payload/SWEEP_ROUTINE_PROMPT.md").read_text()
         self.assertIn("codex-dependency-resumed #$DEP", codex)
-        self.assertIn('"$RESUMED_LINE" -gt "$WAIT_LINE"', codex)
+        self.assertIn('chatgpt-codex-connector[bot]', codex)
+        self.assertIn('github-actions[bot]', codex)
+        self.assertIn('"$RESUMED_ID" -gt "$WAIT_ID"', codex)
+        self.assertIn("Parked: waiting on #N to merge. <!-- codex-dependency-wait #N -->", agents)
+        self.assertIn("RUNNER_LOGIN=$(gh api user --jq .login)", claude)
+        self.assertIn("entire comment body exactly matches", claude)
         self.assertIn("most recent", claude)
         self.assertIn("claude-dependency-resumed #<x>", claude)
 
