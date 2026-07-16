@@ -45,7 +45,6 @@ python3 -m unittest discover -s tests -v
 
 diff -qr \
   --exclude .DS_Store \
-  --exclude CONVERGE_ROUTINE_PROMPT.md \
   --exclude ROUTINE_PROMPT.md \
   --exclude SWEEP_ROUTINE_PROMPT.md \
   ClaudeCode-script/.claude ClaudeCodePlugin/claude-loop/payload

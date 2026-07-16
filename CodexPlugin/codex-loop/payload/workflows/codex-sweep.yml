@@ -3,6 +3,8 @@ name: Codex queue sweep
 on:
   schedule: [{ cron: "17 * * * *" }]
   workflow_dispatch:
+  issues:
+    types: [unlabeled]
   check_run:
     types: [completed]
   status:
@@ -15,7 +17,47 @@ jobs:
     permissions: { actions: write, checks: read, contents: read, issues: write, pull-requests: write, statuses: read }
     env: { GH_TOKEN: "${{ github.token }}", R: "${{ github.repository }}" }
     steps:
+      - name: Dispatch a coalesced event after its owner releases the lease
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_LABEL: ${{ github.event.label.name }}
+          EVENT_ISSUE: ${{ github.event.issue.number }}
+        run: |
+          if [ "$EVENT_NAME" = issues ]; then
+            [ "$EVENT_LABEL" = codex-event-active ] || exit 0
+            ISSUES="$EVENT_ISSUE"
+          elif ! ISSUES=$(gh issue list -R "$R" --limit 1000 --label codex-event-pending --state open --json number --jq '.[].number'); then
+            echo "::error::Could not list issues with coalesced events"
+            exit 1
+          fi
+
+          for N in $ISSUES; do
+            if ! LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
+              echo "::warning::Could not inspect event lease labels for issue #$N"
+              continue
+            fi
+            printf '%s\n' "$LABELS" | grep -Fxq codex-event-pending || continue
+            if printf '%s\n' "$LABELS" | grep -Fxq codex-event-active; then
+              continue
+            elif printf '%s\n' "$LABELS" | grep -Fxq codex-ready; then
+              EXPECTED=codex-ready
+            elif printf '%s\n' "$LABELS" | grep -Fxq codex-running; then
+              EXPECTED=codex-running
+            else
+              gh issue edit "$N" -R "$R" --remove-label codex-event-pending >/dev/null 2>&1 || true
+              continue
+            fi
+            if gh workflow run codex-build-trigger.yml -R "$R" \
+              -f issue_number="$N" -f expected_label="$EXPECTED" \
+              -f mode=event -f reason=coalesced-event; then
+              gh issue edit "$N" -R "$R" --remove-label codex-event-pending >/dev/null 2>&1 || true
+            else
+              echo "::error::Could not dispatch the coalesced event for issue #$N"
+              exit 1
+            fi
+          done
       - name: Unpark merged dependencies
+        if: github.event_name != 'issues'
         run: |
           OWNER=${R%%/*}
           NAME=${R#*/}
@@ -61,6 +103,7 @@ jobs:
             fi
           done
       - name: Resume completed external CI or recover dead runs
+        if: github.event_name != 'issues'
         run: |
           record_activity() {
             local timestamp="$1"
@@ -189,6 +232,8 @@ jobs:
 
             AGE=$(( ($(date +%s) - LAST_ACTIVITY_EPOCH) / 3600 ))
             if [ "$AGE" -ge 2 ]; then
+              gh issue edit "$N" -R "$R" --remove-label codex-event-active >/dev/null 2>&1 || true
+              gh issue edit "$N" -R "$R" --remove-label codex-event-pending >/dev/null 2>&1 || true
               if ! COMMENTS=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body'); then
                 echo "::warning::Could not inspect retry history for issue #$N"
                 continue
@@ -209,6 +254,7 @@ jobs:
             fi
           done
       - name: Send conflicted ready PRs back for rebase
+        if: github.event_name != 'issues'
         run: |
           if ! PRS=$(gh pr list -R "$R" --limit 1000 --state open --json number,headRefName --jq '.[] | select(.headRefName | startswith("codex/")) | .number'); then
             echo "::error::Could not list Codex pull requests"

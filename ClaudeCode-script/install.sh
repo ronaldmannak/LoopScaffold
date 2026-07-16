@@ -2,9 +2,8 @@
 # install.sh — install or update the Claude loop scaffold in a target repo.
 #
 # Usage:
-#   ./install.sh /path/to/repo                 # fresh install or update
+#   ./install.sh /path/to/repo                     # fresh install or update
 #   ./install.sh /path/to/repo --with-actions-ci   # also copy the CI template
-#   ./install.sh /path/to/repo --with-converger    # also copy the optional split-loop trigger
 #
 # Idempotent and update-safe: never overwrites an existing checks.sh
 # (your per-repo BUILD/TEST config), merges settings.json without removing
@@ -12,13 +11,12 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
-TARGET="${1:?usage: install.sh /path/to/repo [--with-actions-ci] [--with-converger]}"
+TARGET="${1:?usage: install.sh /path/to/repo [--with-actions-ci]}"
 shift || true
-WITH_CI=false; WITH_CONVERGER=false
+WITH_CI=false
 for a in "$@"; do
   case "$a" in
     --with-actions-ci) WITH_CI=true ;;
-    --with-converger)  WITH_CONVERGER=true ;;
     *) echo "unknown flag: $a" >&2; exit 1 ;;
   esac
 done
@@ -66,14 +64,13 @@ else
   echo "    kept existing checks.sh (per-repo config preserved)"
 fi
 
-if $WITH_CONVERGER; then
-  mkdir -p .github/workflows
-  if [[ -f .github/workflows/claude-converge-trigger.yml ]]; then
-    echo "    .github/workflows/claude-converge-trigger.yml exists — not touching it"
-  else
-    cp "$SRC/.claude/templates/claude-converge-trigger.yml" .github/workflows/
-    echo "    installed optional converge trigger — configure its workflow name, routine secrets, and CLAUDE_RUNNER_LOGIN repo variable"
-  fi
+# Routine B was removed. Delete only its scaffold-owned repo templates; a
+# configured GitHub workflow and Anthropic routine require an explicit human
+# migration and are never removed behind the user's back.
+rm -f .claude/templates/claude-build-routine-prompt.md \
+  .claude/templates/claude-converge-trigger.yml
+if [[ -f .github/workflows/claude-converge-trigger.yml ]]; then
+  echo "    MIGRATION: Routine B was removed; review and delete .github/workflows/claude-converge-trigger.yml, then restore Routine A from README.md" >&2
 fi
 chmod +x .claude/scripts/*.sh
 
@@ -133,7 +130,7 @@ fi
 cat << 'EOD'
 
 ==> Done. Remaining MANUAL steps (cannot be scripted):
-  1. Review: git status --short -- .claude .swift-version .github/workflows/ci.yml .github/workflows/claude-converge-trigger.yml
+  1. Review: git status --short -- .claude .swift-version .github/workflows/ci.yml
      Stage only the paths shown, then commit "Claude loop scaffold". Push after review.
   2. Routine (UI-only: config lives in your Anthropic account, no API):
      claude.ai/code/routines or Desktop → New → paste the routine prompt
@@ -144,9 +141,6 @@ cat << 'EOD'
      - Actions: done if you passed --with-actions-ci
      - Xcode Cloud: App Store Connect → workflow start condition =
        "Pull Request Changes" targeting main
-     - Optional split converger: if you passed --with-converger, configure its
-       workflow name, routine secrets, and CLAUDE_RUNNER_LOGIN repo variable;
-       replace Routine A with .claude/templates/claude-build-routine-prompt.md
      - Multiple CI providers: put every exact required context name in
        EXPECTED_CI_CHECKS inside .claude/scripts/checks.sh
   4. Inspect existing branch/ruleset protection without changing it. If this

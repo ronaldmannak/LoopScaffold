@@ -1,13 +1,15 @@
 name: Codex converge trigger
-# Starts another repository-connected Codex cloud task when CI or a review gives an open Codex PR new work.
+# Starts another repository-connected Codex cloud task when CI or PR feedback gives an open Codex PR new work.
 on:
   workflow_run:
     workflows: ["CI"]            # <-- set to your CI workflow's name (Actions CI only; external CI wakes codex-sweep through check/status events instead)
     types: [completed]
   pull_request_review:
     types: [submitted]
+  issue_comment:
+    types: [created]
 concurrency:
-  group: codex-converge-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+  group: codex-converge-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.event.issue.number }}
   cancel-in-progress: true
 jobs:
   dispatch:
@@ -16,6 +18,9 @@ jobs:
         && startsWith(github.event.workflow_run.head_branch, 'codex/'))
       || (github.event_name == 'pull_request_review'
         && startsWith(github.event.pull_request.head.ref, 'codex/'))
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.login != 'github-actions[bot]')
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -25,15 +30,32 @@ jobs:
       - name: Dispatch the linked issue
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          EVENT_PR: ${{ github.event.issue.number }}
           R: ${{ github.repository }}
-          REASON: ${{ github.event_name == 'workflow_run' && 'ci-completed' || 'review-submitted' }}
         run: |
-          if ! PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number // ""'); then
-            echo "::error::Could not find the pull request for $BRANCH"
-            exit 1
+          if [ "$EVENT_NAME" = issue_comment ]; then
+            PR="$EVENT_PR"
+            if ! BRANCH=$(gh pr view "$PR" -R "$R" --json headRefName,state --jq 'select(.state == "OPEN") | .headRefName // ""'); then
+              echo "::error::Could not inspect pull request #$PR"
+              exit 1
+            fi
+            REASON=conversation-comment
+          else
+            BRANCH="$EVENT_BRANCH"
+            if ! PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number // ""'); then
+              echo "::error::Could not find the pull request for $BRANCH"
+              exit 1
+            fi
+            if [ "$EVENT_NAME" = workflow_run ]; then
+              REASON=ci-completed
+            else
+              REASON=review-submitted
+            fi
           fi
           [ -z "$PR" ] && exit 0
+          case "$BRANCH" in codex/*) ;; *) exit 0;; esac
           if ! BODY=$(gh pr view "$PR" -R "$R" --json body --jq '.body // ""'); then
             echo "::error::Could not read PR #$PR"
             exit 1

@@ -41,11 +41,11 @@ LOG_DIR=".claude/.checks"; mkdir -p "$LOG_DIR"
 STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
 
 if [[ ${#BUILD[@]} -eq 0 ]]; then
-  if [[ -f Package.swift ]]; then
-    BUILD=(swift build); TEST=(swift test); CLEANCMD=(swift package clean)
-  elif compgen -G "*.xcodeproj" >/dev/null || compgen -G "*.xcworkspace" >/dev/null; then
+  if compgen -G "*.xcodeproj" >/dev/null || compgen -G "*.xcworkspace" >/dev/null; then
     echo "checks.sh: Xcode project detected — configure BUILD/TEST arrays in this script." >&2
     exit 1
+  elif [[ -f Package.swift ]]; then
+    BUILD=(swift build); TEST=(swift test); CLEANCMD=(swift package clean)
   elif [[ -f package.json ]]; then
     if ! command -v node >/dev/null 2>&1; then
       echo "checks.sh: package.json detected but node is unavailable." >&2

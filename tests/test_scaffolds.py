@@ -193,6 +193,26 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertFalse((repo / ".claude/.checks").exists())
                 self.assertFalse((repo / ".codex/.checks").exists())
 
+    def test_xcode_projects_take_priority_over_root_swift_packages(self) -> None:
+        for product, source in (
+            ("claude-standalone", ROOT / "ClaudeCode-script/.claude/scripts/checks.sh"),
+            ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/checks.sh"),
+            ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/checks.sh"),
+        ):
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                (repo / "Package.swift").write_text("// local package\n")
+                (repo / "App.xcodeproj").mkdir()
+                result = subprocess.run(
+                    ["/bin/bash", str(source), "--quick"],
+                    cwd=repo,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("Xcode project detected", result.stderr)
+
 
 class PolicyHookTests(unittest.TestCase):
     def test_protect_hooks_fail_closed_on_malformed_input(self) -> None:
@@ -418,11 +438,11 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("issue_number:", trigger)
         self.assertIn("expected_label:", trigger)
         self.assertIn("actions: write", sweep)
-        self.assertEqual(4, sweep.count("gh workflow run codex-build-trigger.yml"))
-        self.assertEqual(4, sweep.count("-f expected_label="))
-        self.assertEqual(4, sweep.count("-f mode="))
-        self.assertEqual(4, sweep.count("-f reason="))
-        self.assertEqual(3, sweep.count("--limit 1000"))
+        self.assertEqual(5, sweep.count("gh workflow run codex-build-trigger.yml"))
+        self.assertEqual(5, sweep.count("-f expected_label="))
+        self.assertEqual(5, sweep.count("-f mode="))
+        self.assertEqual(5, sweep.count("-f reason="))
+        self.assertEqual(4, sweep.count("--limit 1000"))
         self.assertNotIn("--add-label codex-build", sweep)
 
     def test_codex_build_and_convergence_tasks_use_distinct_modes(self) -> None:
@@ -447,7 +467,37 @@ class ReviewRegressionTests(unittest.TestCase):
             with self.subTest(path=path):
                 skill = (ROOT / path).read_text()
                 self.assertIn("--list-ci-checks", skill)
+                self.assertIn("grep -q -- '--list-ci-checks)'", skill)
+                self.assertIn("older scaffold", skill)
                 self.assertIn("until EVERY configured name is present", skill)
+
+    def test_codex_event_tasks_are_leased_and_overlaps_are_coalesced(self) -> None:
+        trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        iteration = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()
+        self.assertIn("codex-event-active", trigger)
+        self.assertIn("codex-event-pending", trigger)
+        self.assertIn("already has an event owner; coalesced this wake", trigger)
+        self.assertIn("reason=coalesced-event", sweep)
+        self.assertIn("types: [unlabeled]", sweep)
+        self.assertIn("remove `codex-event-active`", iteration)
+        self.assertIn("Never remove `codex-event-pending`", iteration)
+
+    def test_codex_claim_adds_recoverable_state_before_removing_old_state(self) -> None:
+        trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        add = trigger.index('--add-label codex-running')
+        remove = trigger.index('--remove-label "$LABEL"')
+        self.assertLess(add, remove)
+        self.assertIn("restored the original state", trigger)
+        self.assertIn("original state was preserved", trigger)
+
+    def test_codex_converger_wakes_for_pr_conversation_comments(self) -> None:
+        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        self.assertIn("issue_comment:\n    types: [created]", converge)
+        self.assertIn("github.event.issue.pull_request", converge)
+        self.assertIn("REASON=conversation-comment", converge)
+        self.assertIn("event:conversation-comment", trigger)
 
     def test_sweeper_uses_current_loop_activity_before_recovery(self) -> None:
         sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
@@ -496,24 +546,19 @@ class ReviewRegressionTests(unittest.TestCase):
                 self.assertIn("Choose exactly one creation path", skill)
                 self.assertIn('gh issue create --title "..." --body "..."` with\n     no build label', skill)
 
-    def test_claude_empty_backlog_and_split_converger_are_fully_specified(self) -> None:
+    def test_claude_has_one_subscribing_routine_and_no_split_converger(self) -> None:
         routine = (ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md").read_text()
         init_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
         standalone_readme = (ROOT / "ClaudeCode-script/README.md").read_text()
-        prompt = ROOT / "ClaudeCodePlugin/claude-loop/payload/CONVERGE_ROUTINE_PROMPT.md"
-        build_prompt = ROOT / "ClaudeCodePlugin/claude-loop/payload/templates/claude-build-routine-prompt.md"
-        standalone_build = ROOT / "ClaudeCode-script/.claude/templates/claude-build-routine-prompt.md"
+        plugin_payload = ROOT / "ClaudeCodePlugin/claude-loop/payload"
         self.assertIn("no dispatch comment is required for an empty backlog", routine)
         self.assertIn(routine, standalone_readme)
-        self.assertTrue(prompt.is_file())
-        self.assertTrue(build_prompt.is_file())
-        self.assertEqual(build_prompt.read_bytes(), standalone_build.read_bytes())
-        self.assertIn("templates/claude-build-routine-prompt.md", init_skill)
-        self.assertIn("branch-only Routine A prompt", init_skill)
-        self.assertIn("CONVERGE_ROUTINE_PROMPT.md", init_skill)
-        self.assertIn("You were woken because something happened", prompt.read_text())
-        self.assertIn("verify it has exactly one state", prompt.read_text())
-        self.assertIn(prompt.read_text(), standalone_readme)
+        self.assertFalse((plugin_payload / "CONVERGE_ROUTINE_PROMPT.md").exists())
+        self.assertFalse((plugin_payload / "templates/claude-build-routine-prompt.md").exists())
+        self.assertFalse((plugin_payload / "templates/claude-converge-trigger.yml").exists())
+        self.assertNotIn("EVENT MODE", (plugin_payload / "skills/pr-iteration/SKILL.md").read_text())
+        self.assertIn("FULL single-routine prompt", init_skill)
+        self.assertNotIn("--with-converger", standalone_readme)
         self.assertIn("STEP 0 — DEPENDENCIES, CLAIM & IDEMPOTENCY.", standalone_readme)
         self.assertIn("7. DISPATCH SUGGESTION", standalone_readme)
 
@@ -521,18 +566,21 @@ class ReviewRegressionTests(unittest.TestCase):
         claude_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
         codex_skill = (ROOT / "CodexPlugin/codex-loop/skills/loop-init/SKILL.md").read_text()
         installer = (ROOT / "ClaudeCode-script/install.sh").read_text()
-        self.assertIn(".github/workflows/claude-converge-trigger.yml", claude_skill)
+        self.assertIn("Routine B was removed", claude_skill)
         self.assertIn("never overwrite an existing workflow", codex_skill)
-        self.assertIn("CLAUDE_RUNNER_LOGIN repo variable", installer)
+        self.assertNotIn("CLAUDE_RUNNER_LOGIN", installer)
+        self.assertNotIn("--with-converger", installer)
         self.assertIn("Set up Codex cloud", codex_skill)
         self.assertIn("@codex", codex_skill)
+        self.assertIn("codex-event-active", codex_skill)
+        self.assertIn("codex-event-pending", codex_skill)
         self.assertNotIn("OPENAI_API_KEY", codex_skill)
         self.assertNotIn("CODEX_RUNNER_LOGIN", codex_skill)
 
     def test_codex_escalation_blocks_the_linked_issue(self) -> None:
         skill = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()
         self.assertIn("replace `codex-running` with `codex-blocked`", skill)
-        self.assertIn("Verify the issue has exactly the blocked terminal label", skill)
+        self.assertIn("Verify the issue has exactly the blocked terminal state label", skill)
 
     def test_claude_completion_and_escalation_set_terminal_labels(self) -> None:
         for path in (
@@ -574,6 +622,14 @@ class InstallerTests(unittest.TestCase):
             checks.parent.mkdir()
             checks.write_text("#!/usr/bin/env bash\nexit 0\n")
             checks.chmod(0o755)
+            legacy_build = repo / ".claude/templates/claude-build-routine-prompt.md"
+            legacy_build.parent.mkdir(parents=True)
+            legacy_build.write_text("legacy\n")
+            legacy_trigger = repo / ".claude/templates/claude-converge-trigger.yml"
+            legacy_trigger.write_text("legacy\n")
+            configured_workflow = repo / ".github/workflows/claude-converge-trigger.yml"
+            configured_workflow.parent.mkdir(parents=True)
+            configured_workflow.write_text("configured by user\n")
 
             binary = repo / "bin"
             binary.mkdir()
@@ -583,12 +639,16 @@ class InstallerTests(unittest.TestCase):
             env = dict(os.environ)
             env["PATH"] = f"{binary}:{env['PATH']}"
             installer = ROOT / "ClaudeCode-script/install.sh"
-            run("/bin/bash", installer, repo, cwd=ROOT, env=env)
+            first_install = run("/bin/bash", installer, repo, cwd=ROOT, env=env)
             first = settings.read_bytes()
             run("/bin/bash", installer, repo, cwd=ROOT, env=env)
             self.assertEqual(first, settings.read_bytes())
             self.assertEqual("#!/usr/bin/env bash\nexit 0\n", checks.read_text())
             self.assertEqual("keep", json.loads(first)["custom"])
+            self.assertFalse(legacy_build.exists())
+            self.assertFalse(legacy_trigger.exists())
+            self.assertEqual("configured by user\n", configured_workflow.read_text())
+            self.assertIn("Routine B was removed", first_install.stderr)
 
     def test_invalid_settings_stop_before_installation_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

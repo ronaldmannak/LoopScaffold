@@ -9,11 +9,12 @@ Goal state (all must be true before you declare done):
 1. A **ready-for-review** PR exists (NOT draft — external reviewers skip drafts) and links its issue (`Closes #N`). `gh pr create` without `--draft`; if a PR somehow exists as draft, promote it with `gh pr ready`.
 2. All CI checks are green.
 3. Every review comment — including from automated reviewers like Codex — is fixed (commit reference), answered (reasoned reply), or acknowledged (👍 reaction). None ignored.
-3b. Never busy-poll and never use fixed sleeps for CI. Use the mode below that matches how this session runs.
+3b. Never busy-poll and never use fixed sleeps for CI. Use the waiting strategy below.
 
-## Two operating modes
+## Waiting strategy
 
-**WATCH MODE (default — single routine or interactive session).** Strategy order for waiting:
+The single routine or interactive session owns the PR until it converges or
+escalates. Strategy order for waiting:
    1. PRIMARY — SUBSCRIBE, if this session has PR-subscription/notification tools: subscribe to the PR's activity (CI results, review comments) and react to each event as it arrives. ALWAYS pair the subscription with a backstop check-in of AT MOST 5 minutes — subscriptions can drop events, and an unattended session that trusts one completely can wait forever. On each backstop wake-up with no events: verify actual PR state before going back to waiting (the event you're waiting for may have been dropped).
    2. If no subscription capability exists: the blocking watch below — it wakes the instant CI completes.
    3. If the blocking watch is unavailable or gets killed: scheduled check-ins alone, interval AT MOST 5 minutes.
@@ -21,14 +22,13 @@ Goal state (all must be true before you declare done):
 
 Waiting is done with BLOCKING commands, which cost no tokens and wake the instant something completes:
    - CI: `gh pr checks <pr> --watch --interval 30` — returns when all checks finish. This is the in-session subscription; there is no fixed sleep to tune and CI duration doesn't matter.
-   - ZERO CHECKS IS NEVER GREEN. External CI systems (Xcode Cloud, etc.) can take 1-3 minutes to REGISTER after a push. Read the exact required context names from `.claude/scripts/checks.sh --list-ci-checks`. When that list is nonempty, retry `gh pr checks <pr> --json name` every 60s for up to 5 minutes until EVERY configured name is present; one early provider is not sufficient. When the list is empty, the single-provider fallback is to wait until at least one check registers. Only then start the watch. If the expected set never appears, escalate ("Expected CI checks never registered: ..."), do not declare success.
+   - ZERO CHECKS IS NEVER GREEN. External CI systems (Xcode Cloud, etc.) can take 1-3 minutes to REGISTER after a push. First detect whether the preserved per-repo script supports CI listing with `grep -q -- '--list-ci-checks)' .claude/scripts/checks.sh`. If supported, read the exact required context names from `.claude/scripts/checks.sh --list-ci-checks`; when that list is nonempty, retry `gh pr checks <pr> --json name` every 60s for up to 5 minutes until EVERY configured name is present. One early provider is not sufficient. If the script is from an older scaffold or the configured list is empty, use the single-provider fallback and wait until at least one check registers. Only then start the watch. If the expected set never appears, escalate ("Expected CI checks never registered: ..."), do not declare success.
    - External reviewers (Codex etc.): they normally review within minutes of PR open or a push, but sometimes don't trigger at all. Escalating protocol, per head SHA:
      1. If no external review exists for the CURRENT head 10 minutes after it was pushed: post a PR comment containing exactly `@codex review` to invoke it manually. ONCE per head SHA — never repeat for the same head.
      2. If 10 further minutes pass with still no review: treat external review as unavailable for this head. Record it in the PR description ("External review did not run for <sha> despite manual invocation") and proceed — the internal code-reviewer verdict and CI remain the gates.
      Do not count your own `@codex review` comment as a review comment, and never reply to it.
    - Guard the watch: if the environment kills long-blocking calls, fall back to `sleep 120` + `gh pr checks` in a loop, still capped by this skill's iteration limits.
 
-**EVENT MODE (split-architecture converger — for very slow CI).** You are woken by a CI completion or submitted review; sessions are not reused across events. Read the CURRENT full PR state (other events may have landed since the wake reason), act ONCE — one coherent fix batch, or a terminal action (claude-ready / escalate) — and exit. Your push re-runs CI, which wakes the next session; the re-fire IS the loop. Iteration counting is cross-session: count fix commits on the branch (`git log origin/main..HEAD --oneline | grep -c 'fix(ci)'`) — at 8, escalate instead of pushing.
 4. The PR description contains evidence per `.claude/rules/git.md`.
 
 ## Loop procedure

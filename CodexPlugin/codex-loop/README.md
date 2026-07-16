@@ -18,9 +18,11 @@ marker makes each completed result dispatch exactly once, and the hourly run
 remains a missed-event fallback.
 
 The initial cloud task runs in BUILD MODE and exits after pushing its PR;
-CI/review wakes run separately in EVENT MODE and act once, so a waiting builder
-cannot race a converger. Repositories with multiple CI providers list every
-exact required context in `EXPECTED_CI_CHECKS` inside checks.sh.
+CI/review/comment wakes run separately in EVENT MODE and act once. Persistent
+issue-label leases allow one event owner per issue while coalescing overlapping
+wakes into a single follow-up, so independent cloud tasks cannot write the same
+branch concurrently. Repositories with multiple CI providers list every exact
+required context in `EXPECTED_CI_CHECKS` inside checks.sh.
 
 Install the plugin, run $loop-init in a repo, follow the printed steps.
 Labels codex-* and branches codex/* — designed to coexist with
