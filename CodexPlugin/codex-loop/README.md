@@ -31,10 +31,22 @@ required context in `EXPECTED_CI_CHECKS` inside checks.sh.
 CI is a developer-configured precondition, not part of this scaffold. Confirm
 that GitHub Actions or Xcode Cloud/external CI runs for pull requests and
 reports the context the loop watches before labeling the first issue. The
-installer verifies or asks for that confirmation; it does not create or
+initializer verifies or asks for that confirmation; it does not create or
 overwrite the project's CI workflow.
 
-Install the plugin, run $loop-init in a repo, follow the printed steps.
+## Install
+
+From a terminal, add the LoopScaffold marketplace and install the plugin:
+
+```bash
+codex plugin marketplace add ronaldmannak/LoopScaffold
+codex plugin add codex-loop@loop-scaffold
+```
+
+Then start a new Codex session at the root of a target repository and invoke
+**`$codex-loop:loop-init`**. Review its proposed changes and follow the printed
+steps. Run the initializer again after plugin updates.
+
 Labels codex-* and branches codex/* — designed to coexist with
 claude-loop in the same repository for side-by-side agent comparison.
 

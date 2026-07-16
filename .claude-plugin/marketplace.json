@@ -1,0 +1,14 @@
+{
+  "name": "loop-scaffold",
+  "owner": {
+    "name": "Ronald Mannak"
+  },
+  "description": "Issue-to-PR loop scaffolds for Claude Code.",
+  "plugins": [
+    {
+      "name": "claude-loop",
+      "source": "./ClaudeCodePlugin/claude-loop",
+      "description": "Turn approved GitHub issues into reviewed pull requests with Claude Code."
+    }
+  ]
+}

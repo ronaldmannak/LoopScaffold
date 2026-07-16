@@ -4,13 +4,23 @@ Autonomous issue-to-PR loop for Claude Code. Plan in chat → labeled GitHub
 issue → cloud routine implements, converges CI + reviews → claude-ready →
 human merges.
 
-Install the plugin, then in each repo run **/loop-init**. It copies the
+## Install
+
+From a terminal, add the LoopScaffold marketplace and install the plugin:
+
+```bash
+claude plugin marketplace add ronaldmannak/LoopScaffold --scope user
+claude plugin install claude-loop@loop-scaffold --scope user
+```
+
+Then start a new Claude Code session at the root of a target repository and run
+**`/claude-loop:loop-init`**. It copies the
 runtime scaffolding into the repo (the sandbox only guarantees
 repo-committed content), seeds per-repo config, creates labels, and prints
 the two things you must paste by hand: the routine config and the cloud
 environment setup script (both live in your Anthropic account, no API).
 
-Rerun /loop-init to update; it preserves your customized checks.sh and
+Rerun `/claude-loop:loop-init` to update; it preserves your customized checks.sh and
 tells you when the routine prompt changed and needs re-pasting.
 
 One routine owns implementation and PR convergence through its subscription or
