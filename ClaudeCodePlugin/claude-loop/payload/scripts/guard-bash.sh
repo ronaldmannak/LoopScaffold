@@ -161,6 +161,21 @@ def positional_arguments(start: int, end: int, takes_value: set[str]) -> list[st
             index += 1
     return values
 
+def push_uses_force(arguments: list[str]) -> bool:
+    for argument in arguments:
+        if argument == "--":
+            break
+        if argument == "--force" or argument.startswith("--force-with-lease"):
+            return True
+        if not argument.startswith("-") or argument.startswith("--"):
+            continue
+        for option in argument[1:]:
+            if option == "f":
+                return True
+            if option == "o":
+                break  # The remainder is --push-option's value, not a flag cluster.
+    return False
+
 def block(label: str):
     sys.stderr.write(
         f"BLOCKED ({label}): {command.strip()[:200]}\n"
@@ -175,7 +190,7 @@ for index, token in enumerate(tokens):
         subcommand, sub_index = git_subcommand(index, end)
         arguments = tokens[sub_index + 1:end]
         if subcommand == "push":
-            if any(arg in {"-f", "--force"} or arg.startswith("--force-with-lease") for arg in arguments):
+            if push_uses_force(arguments):
                 block("force push")
             if any(arg in {"--all", "--branches", "--mirror"} for arg in arguments):
                 block("push to main")

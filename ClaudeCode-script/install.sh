@@ -145,7 +145,10 @@ cat << 'EOD'
      - Xcode Cloud: App Store Connect → workflow start condition =
        "Pull Request Changes" targeting main
      - Optional split converger: if you passed --with-converger, configure its
-       workflow name, routine secrets, and CLAUDE_RUNNER_LOGIN repo variable
+       workflow name, routine secrets, and CLAUDE_RUNNER_LOGIN repo variable;
+       replace Routine A with .claude/templates/claude-build-routine-prompt.md
+     - Multiple CI providers: put every exact required context name in
+       EXPECTED_CI_CHECKS inside .claude/scripts/checks.sh
   4. Inspect existing branch/ruleset protection without changing it. If this
      repo has no merge gate, configure one manually in GitHub. Required checks
      appear only after reporting once, so a throwaway PR may be needed.

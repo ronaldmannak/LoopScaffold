@@ -27,6 +27,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
           R: ${{ github.repository }}
+          REASON: ${{ github.event_name == 'workflow_run' && 'ci-completed' || 'review-submitted' }}
         run: |
           if ! PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number // ""'); then
             echo "::error::Could not find the pull request for $BRANCH"
@@ -52,4 +53,5 @@ jobs:
             exit 0
           fi
           gh workflow run codex-build-trigger.yml -R "$R" \
-            -f issue_number="$N" -f expected_label="$EXPECTED"
+            -f issue_number="$N" -f expected_label="$EXPECTED" \
+            -f mode=event -f reason="$REASON"

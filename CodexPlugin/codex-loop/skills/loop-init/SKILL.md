@@ -22,6 +22,7 @@ If AGENTS.md contains `<!-- codex-loop:start`, replace the complete marker-delim
 
 ## 4. Seeds & GitHub
 - Swift repo without `.swift-version`: write `6.3.3`; Xcode projects must configure checks.sh BUILD/TEST arrays.
+- Repositories with more than one CI provider must configure every exact required context name in `EXPECTED_CI_CHECKS` inside checks.sh; verify with `bash .codex/scripts/checks.sh --list-ci-checks`.
 - Run `bash .codex/scripts/checks.sh --quick`; report honestly.
 - Labels: inspect each of `codex-build`, `codex-running`, `codex-ready`, and `codex-blocked`; create only missing labels. Report authorization/repository failures distinctly—never treat every failed create as proof that a label exists.
 
@@ -31,7 +32,7 @@ Show `git status --short -- AGENTS.md .agents .codex .github/workflows/codex-bui
 ## 6. Manual steps — print VERBATIM as the final message
 1. Set up Codex cloud for this repository and confirm its GitHub App connection. The build and convergence workflows use repository-connected `@codex` issue comments; no repository API secret is required.
 2. Trust the hooks: run `/hooks` in Codex CLI in this repo once, review, and trust `.codex/hooks.json` entries (re-trust after any scaffold update — Codex pins trust to the hook hash).
-3. Inspect existing branch/ruleset protection without mutating it. If no merge gate exists, configure PR + passing-check requirements manually.
+3. Inspect existing branch/ruleset protection without mutating it. If no merge gate exists, configure PR + passing-check requirements manually. When more than one CI provider is required, list every exact context name in `EXPECTED_CI_CHECKS` inside `.codex/scripts/checks.sh` so the converger waits for all providers to register.
 4. Smoke test: `gh issue create --label codex-build --title "..." --body "<plan-to-issue format>"` with something trivial, then watch `Codex build trigger` in GitHub Actions. Confirm the GitHub App reacts to the workflow's bot-authored `@codex` comment and starts a cloud task; in the cloud task, verify that hooks fired and checks.sh evidence was pasted.
 5. Optional external review: connect the repository to Codex code review if you want the PR loop's one-time `@codex review` fallback.
 6. Coexistence note: this loop uses codex-* labels and codex/ branches; it can run beside the claude-loop plugin (claude-* labels, claude/ branches) in the same repo for A/B comparison — same issue format, same checks.sh oracle.

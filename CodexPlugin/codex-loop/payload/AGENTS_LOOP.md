@@ -59,10 +59,13 @@ These rules apply to ALL code written in this repository, by any session, subage
 - If the issue body contains `Depends-on: #N`, verify that #N was closed by a
   merged pull request before starting. Otherwise replace codex-running with
   codex-blocked and comment `codex-dependency-wait #N`; the sweeper resumes it.
-- Terminal invariant: every task ends with exactly one state label:
-  codex-ready or codex-blocked, never either one alongside codex-running.
-  Success replaces codex-running with codex-ready; escalation replaces it
-  with codex-blocked. Clean escalation with a diagnosis comment is SUCCESS.
+- Terminal invariant: any task that converges or escalates ends with exactly
+  one terminal label: codex-ready or codex-blocked, never either one alongside
+  codex-running. Split-architecture handoffs intentionally keep only
+  codex-running: BUILD after it pushes the ready-for-review PR, and EVENT after
+  it pushes one fix batch or observes another configured provider still
+  pending. Success replaces codex-running with codex-ready; escalation replaces
+  it with codex-blocked. Clean escalation with a diagnosis comment is SUCCESS.
 - Use the $pr-iteration, $verification, $code-review, and $ci-diagnosis
   skills for their respective phases.
 <!-- codex-loop:end -->

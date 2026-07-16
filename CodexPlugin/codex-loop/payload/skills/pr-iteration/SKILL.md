@@ -5,7 +5,7 @@ description: The playbook for opening, updating, and iterating on a pull request
 
 # PR iteration loop
 
-Goal state (all must be true before you declare done):
+Goal state (all must be true before WATCH or EVENT MODE declares the loop converged; BUILD MODE deliberately hands a running issue to the event converger):
 1. A **ready-for-review** PR exists (NOT draft — external reviewers skip drafts) and links its issue (`Closes #N`). `gh pr create` without `--draft`; if a PR somehow exists as draft, promote it with `gh pr ready`.
 2. All CI checks are green.
 3. Every review comment — including from automated reviewers like Codex — is fixed (commit reference), answered (reasoned reply), or acknowledged (👍 reaction). None ignored.
@@ -21,14 +21,16 @@ Goal state (all must be true before you declare done):
 
 Waiting is done with BLOCKING commands, which cost no tokens and wake the instant something completes:
    - CI: `gh pr checks <pr> --watch --interval 30` — returns when all checks finish. This is the in-session subscription; there is no fixed sleep to tune and CI duration doesn't matter.
-   - ZERO CHECKS IS NEVER GREEN. External CI systems (Xcode Cloud, etc.) can take 1-3 minutes to REGISTER their check after a push, and `gh pr checks` may error or report nothing in that window. After opening a PR or pushing: retry `gh pr checks` every 60s for up to 5 minutes until at least one check is registered, THEN start the watch. If no check ever appears, that is a broken pipeline — escalate ("CI never registered on this PR"), do not declare success.
+   - ZERO CHECKS IS NEVER GREEN. External CI systems (Xcode Cloud, etc.) can take 1-3 minutes to REGISTER after a push. Read the exact required context names from `.codex/scripts/checks.sh --list-ci-checks`. When that list is nonempty, retry `gh pr checks <pr> --json name` every 60s for up to 5 minutes until EVERY configured name is present; one early provider is not sufficient. When the list is empty, the single-provider fallback is to wait until at least one check registers. Only then start the watch. If the expected set never appears, escalate ("Expected CI checks never registered: ..."), do not declare success.
    - External reviewers (Codex etc.): they normally review within minutes of PR open or a push, but sometimes don't trigger at all. Escalating protocol, per head SHA:
      1. If no external review exists for the CURRENT head 10 minutes after it was pushed: post a PR comment containing exactly `@codex review` to invoke it manually. ONCE per head SHA — never repeat for the same head.
      2. If 10 further minutes pass with still no review: treat external review as unavailable for this head. Record it in the PR description ("External review did not run for <sha> despite manual invocation") and proceed — the internal code-reviewer verdict and CI remain the gates.
      Do not count your own `@codex review` comment as a review comment, and never reply to it.
    - Guard the watch: if the environment kills long-blocking calls, fall back to `sleep 120` + `gh pr checks` in a loop, still capped by this skill's iteration limits.
 
-**EVENT MODE (split-architecture converger — for very slow CI).** You are woken by a CI completion or submitted review; sessions are not reused across events. Read the CURRENT full PR state (other events may have landed since the wake reason), act ONCE — one coherent fix batch, or a terminal action (codex-ready / escalate) — and exit. Your push re-runs CI, which wakes the next session; the re-fire IS the loop. Iteration counting is cross-session: count fix commits on the branch (`git log origin/main..HEAD --oneline | grep -c 'fix(ci)'`) — at 8, escalate instead of pushing.
+**BUILD MODE (split-architecture producer).** Implement or resume the issue, run local verification and internal review, open or update the ready-for-review PR, push one coherent implementation, and exit with the linked issue still carrying only `codex-running`. Do NOT wait for CI, invoke external review, run the completion consistency check, or mark the issue ready. CI/review completions start EVENT MODE tasks; this handoff is the intended nonterminal boundary and prevents a waiting producer from racing the converger.
+
+**EVENT MODE (split-architecture converger — for very slow CI).** You are woken by a CI completion or submitted review; sessions are not reused across events. Read the CURRENT full PR state (other events may have landed since the wake reason), act ONCE — one coherent fix batch, a terminal action (codex-ready / escalate), or no change when the current head is still waiting on another configured provider — and exit. Never enter a blocking watch in this mode. Your push re-runs CI, which wakes the next session; the re-fire IS the loop. Iteration counting is cross-session: count fix commits on the branch (`git log origin/main..HEAD --oneline | grep -c 'fix(ci)'`) — at 8, escalate instead of pushing.
 4. The PR description contains the evidence required by the AGENTS.md loop rules.
 
 ## Loop procedure
@@ -54,7 +56,7 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 6. **Close the loop on review comments**: fixed ones get a reply with the commit SHA; everything else you processed gets a 👍 reaction per the acknowledgment protocol in 1b.
 7. Return to step 1.
 
-## Completion consistency check (MANDATORY before declaring done)
+## Completion consistency check (MANDATORY before declaring done; BUILD MODE skips this and hands off as running)
 
 1. Re-read the head SHA: `gh pr view <pr> --json headRefOid --jq .headRefOid`.
 2. If it differs from the $HEAD_SHA your status snapshot used, discard the snapshot and return to step 1 — green checks for a stale commit prove nothing.

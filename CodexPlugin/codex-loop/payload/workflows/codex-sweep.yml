@@ -19,7 +19,7 @@ jobs:
         run: |
           OWNER=${R%%/*}
           NAME=${R#*/}
-          if ! ISSUES=$(gh issue list -R "$R" --label codex-blocked --state open --json number --jq '.[].number'); then
+          if ! ISSUES=$(gh issue list -R "$R" --limit 1000 --label codex-blocked --state open --json number --jq '.[].number'); then
             echo "::error::Could not list blocked issues"
             exit 1
           fi
@@ -50,7 +50,8 @@ jobs:
               fi
               if [ "$MERGED" -gt 0 ]; then
                 if gh workflow run codex-build-trigger.yml -R "$R" \
-                  -f issue_number="$N" -f expected_label=codex-blocked; then
+                  -f issue_number="$N" -f expected_label=codex-blocked \
+                  -f mode=build -f reason=dependency-resume; then
                   gh issue comment "$N" -R "$R" --body "Dependency #$DEP was closed by a merged PR — resuming via workflow dispatch. <!-- codex-dependency-resumed #$DEP -->"
                 else
                   echo "::error::Could not dispatch issue #$N; leaving it blocked for the next sweep"
@@ -74,7 +75,7 @@ jobs:
             fi
           }
 
-          if ! ISSUES=$(gh issue list -R "$R" --label codex-running --state open --json number --jq '.[].number'); then
+          if ! ISSUES=$(gh issue list -R "$R" --limit 1000 --label codex-running --state open --json number --jq '.[].number'); then
             echo "::error::Could not list running issues"
             exit 1
           fi
@@ -174,7 +175,8 @@ jobs:
                 fi
                 if ! printf '%s\n' "$COMMENTS" | grep -Fq "$CI_MARKER"; then
                   if gh workflow run codex-build-trigger.yml -R "$R" \
-                    -f issue_number="$N" -f expected_label=codex-running; then
+                    -f issue_number="$N" -f expected_label=codex-running \
+                    -f mode=event -f reason=external-ci; then
                     gh issue comment "$N" -R "$R" --body "External CI completed for $HEAD_SHA — resuming convergence. <!-- $CI_MARKER -->"
                     continue
                   else
@@ -196,7 +198,8 @@ jobs:
                 gh issue comment "$N" -R "$R" --body "Second apparent dead run; needs a human look."
               else
                 if gh workflow run codex-build-trigger.yml -R "$R" \
-                  -f issue_number="$N" -f expected_label=codex-running; then
+                  -f issue_number="$N" -f expected_label=codex-running \
+                  -f mode=build -f reason=dead-run-retry; then
                   gh issue comment "$N" -R "$R" --body "Previous run appears dead — retriggering via workflow dispatch. <!-- codex-dead-run-retry -->"
                 else
                   echo "::error::Could not redispatch issue #$N; leaving it running for the next sweep"
@@ -207,7 +210,7 @@ jobs:
           done
       - name: Send conflicted ready PRs back for rebase
         run: |
-          if ! PRS=$(gh pr list -R "$R" --state open --json number,headRefName --jq '.[] | select(.headRefName | startswith("codex/")) | .number'); then
+          if ! PRS=$(gh pr list -R "$R" --limit 1000 --state open --json number,headRefName --jq '.[] | select(.headRefName | startswith("codex/")) | .number'); then
             echo "::error::Could not list Codex pull requests"
             exit 1
           fi
@@ -228,7 +231,8 @@ jobs:
             fi
             if [ "$M" = "CONFLICTING" ] && printf '%s\n' "$LABELS" | grep -Fxq codex-ready; then
               if gh workflow run codex-build-trigger.yml -R "$R" \
-                -f issue_number="$N" -f expected_label=codex-ready; then
+                -f issue_number="$N" -f expected_label=codex-ready \
+                -f mode=event -f reason=rebase-conflict; then
                 gh issue comment "$N" -R "$R" --body "Base moved; sending back for rebase + reconvergence via workflow dispatch."
               else
                 echo "::error::Could not redispatch conflicted issue #$N; leaving it ready for the next sweep"

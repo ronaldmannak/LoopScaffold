@@ -2,30 +2,43 @@
 # Single source of truth for "does this project pass".
 # Skills, routines, and CI all call THIS script so verification can't drift.
 #
-# Usage: checks.sh [--quick] [--clean]   (--quick = build, or first configured check when no build; --clean = tool-native clean first)
+# Usage: checks.sh [--quick] [--clean] [--list-ci-checks]
+#   --quick = build, or first configured check when no build
+#   --clean = tool-native clean first
+#   --list-ci-checks = print configured required CI context names and exit
 # Output: one summary line per step; full logs in .claude/.checks/.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-
-QUICK=false; CLEAN=false
-for a in "$@"; do
-  case "$a" in
-    --quick) QUICK=true ;;
-    --clean) CLEAN=true ;;
-    *) echo "checks.sh: unknown option: $a" >&2; exit 2 ;;
-  esac
-done
-LOG_DIR=".claude/.checks"; mkdir -p "$LOG_DIR"
-[[ -f "$LOG_DIR/.gitignore" ]] || echo "*" > "$LOG_DIR/.gitignore"   # never commit logs
-STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
 
 # ---------------------------------------------------------------
 # CONFIGURE PER PROJECT (preferred over auto-detection). Examples:
 #   BUILD=(xcodebuild -scheme Pico -destination 'platform=macOS' build)
 #   TEST=(xcodebuild -scheme Pico -destination 'platform=macOS' test)
 #   LINT=(swiftlint --strict)
+#   EXPECTED_CI_CHECKS=("CI / verify" "Xcode Cloud")
+# Use exact names from `gh pr checks`. Configure every provider when checks
+# can register at different times; the PR loop waits for all names listed.
 # ---------------------------------------------------------------
-BUILD=(); TEST=(); LINT=(); CLEANCMD=()
+BUILD=(); TEST=(); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()
+
+QUICK=false; CLEAN=false; LIST_CI_CHECKS=false
+for a in "$@"; do
+  case "$a" in
+    --quick) QUICK=true ;;
+    --clean) CLEAN=true ;;
+    --list-ci-checks) LIST_CI_CHECKS=true ;;
+    *) echo "checks.sh: unknown option: $a" >&2; exit 2 ;;
+  esac
+done
+if $LIST_CI_CHECKS; then
+  if [[ ${#EXPECTED_CI_CHECKS[@]} -gt 0 ]]; then
+    printf '%s\n' "${EXPECTED_CI_CHECKS[@]}"
+  fi
+  exit 0
+fi
+LOG_DIR=".claude/.checks"; mkdir -p "$LOG_DIR"
+[[ -f "$LOG_DIR/.gitignore" ]] || echo "*" > "$LOG_DIR/.gitignore"   # never commit logs
+STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
 
 if [[ ${#BUILD[@]} -eq 0 ]]; then
   if [[ -f Package.swift ]]; then

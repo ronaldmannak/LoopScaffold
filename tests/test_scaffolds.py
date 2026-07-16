@@ -173,6 +173,26 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertIn("test: PASS", full.stdout)
                 self.assertTrue((repo / log_directory).is_dir())
 
+    def test_expected_ci_checks_can_be_listed_without_running_project_checks(self) -> None:
+        for product, source in (
+            ("claude-standalone", ROOT / "ClaudeCode-script/.claude/scripts/checks.sh"),
+            ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/checks.sh"),
+            ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/checks.sh"),
+        ):
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = repo / "checks.sh"
+                script.write_text(source.read_text().replace(
+                    "EXPECTED_CI_CHECKS=()",
+                    'EXPECTED_CI_CHECKS=("CI / verify" "Xcode Cloud")',
+                    1,
+                ))
+                result = run("/bin/bash", script, "--list-ci-checks", cwd=repo)
+                self.assertEqual(["CI / verify", "Xcode Cloud"], result.stdout.splitlines())
+                self.assertFalse((repo / ".claude/.checks").exists())
+                self.assertFalse((repo / ".codex/.checks").exists())
+
 
 class PolicyHookTests(unittest.TestCase):
     def test_protect_hooks_fail_closed_on_malformed_input(self) -> None:
@@ -290,6 +310,7 @@ class PolicyHookTests(unittest.TestCase):
     def test_bash_guards_cover_git_options_refspecs_and_test_deletions(self) -> None:
         blocked = (
             "git -C elsewhere push --force origin main",
+            "git push -uf origin feature",
             "git push --all",
             "git push origin +main",
             "git push origin feature:main",
@@ -305,6 +326,8 @@ class PolicyHookTests(unittest.TestCase):
                     self.assertEqual(2, result.returncode)
             safe = invoke_hook(hook, {"tool_input": {"command": "git push origin main-thread-fix"}})
             self.assertEqual(0, safe.returncode)
+            push_option = invoke_hook(hook, {"tool_input": {"command": "git push -o force-color origin feature"}})
+            self.assertEqual(0, push_option.returncode)
             non_test = invoke_hook(hook, {"tool_input": {"command": "rm Sources/Contest.swift"}})
             self.assertEqual(0, non_test.returncode)
 
@@ -374,7 +397,7 @@ class ReviewRegressionTests(unittest.TestCase):
     def test_codex_uses_repository_connected_cloud_tasks_without_an_api_key(self) -> None:
         trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
         converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
-        self.assertIn("@codex Implement issue", trigger)
+        self.assertIn("@codex Implement or converge issue", trigger)
         self.assertNotIn("openai/codex-action", trigger)
         self.assertNotIn("OPENAI_API_KEY", trigger)
         self.assertNotIn("openai-api-key", trigger)
@@ -382,6 +405,8 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertNotIn("contents: write", trigger)
         self.assertNotIn("pull-requests: write", trigger)
         self.assertIn("expected_label:", trigger)
+        self.assertIn("mode:", trigger)
+        self.assertIn("reason:", trigger)
         self.assertIn("gh workflow run codex-build-trigger.yml", converge)
         self.assertNotIn("@codex", converge)
         self.assertNotIn("CODEX_RUNNER_LOGIN", converge)
@@ -395,7 +420,34 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("actions: write", sweep)
         self.assertEqual(4, sweep.count("gh workflow run codex-build-trigger.yml"))
         self.assertEqual(4, sweep.count("-f expected_label="))
+        self.assertEqual(4, sweep.count("-f mode="))
+        self.assertEqual(4, sweep.count("-f reason="))
+        self.assertEqual(3, sweep.count("--limit 1000"))
         self.assertNotIn("--add-label codex-build", sweep)
+
+    def test_codex_build_and_convergence_tasks_use_distinct_modes(self) -> None:
+        trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        agents = (ROOT / "CodexPlugin/codex-loop/payload/AGENTS_LOOP.md").read_text()
+        self.assertIn("options: [build, event]", trigger)
+        self.assertIn("Use $pr-iteration in BUILD MODE", trigger)
+        self.assertIn("Use $pr-iteration in EVENT MODE", trigger)
+        self.assertIn("-f mode=event", converge)
+        self.assertIn("ci-completed", converge)
+        self.assertIn("review-submitted", converge)
+        self.assertIn("Split-architecture handoffs intentionally keep only\n  codex-running", agents)
+
+    def test_all_expected_ci_providers_must_register(self) -> None:
+        paths = (
+            "ClaudeCode-script/.claude/skills/pr-iteration/SKILL.md",
+            "ClaudeCodePlugin/claude-loop/payload/skills/pr-iteration/SKILL.md",
+            "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                skill = (ROOT / path).read_text()
+                self.assertIn("--list-ci-checks", skill)
+                self.assertIn("until EVERY configured name is present", skill)
 
     def test_sweeper_uses_current_loop_activity_before_recovery(self) -> None:
         sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
@@ -449,12 +501,21 @@ class ReviewRegressionTests(unittest.TestCase):
         init_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
         standalone_readme = (ROOT / "ClaudeCode-script/README.md").read_text()
         prompt = ROOT / "ClaudeCodePlugin/claude-loop/payload/CONVERGE_ROUTINE_PROMPT.md"
+        build_prompt = ROOT / "ClaudeCodePlugin/claude-loop/payload/templates/claude-build-routine-prompt.md"
+        standalone_build = ROOT / "ClaudeCode-script/.claude/templates/claude-build-routine-prompt.md"
         self.assertIn("no dispatch comment is required for an empty backlog", routine)
+        self.assertIn(routine, standalone_readme)
         self.assertTrue(prompt.is_file())
+        self.assertTrue(build_prompt.is_file())
+        self.assertEqual(build_prompt.read_bytes(), standalone_build.read_bytes())
+        self.assertIn("templates/claude-build-routine-prompt.md", init_skill)
+        self.assertIn("branch-only Routine A prompt", init_skill)
         self.assertIn("CONVERGE_ROUTINE_PROMPT.md", init_skill)
         self.assertIn("You were woken because something happened", prompt.read_text())
         self.assertIn("verify it has exactly one state", prompt.read_text())
         self.assertIn(prompt.read_text(), standalone_readme)
+        self.assertIn("STEP 0 — DEPENDENCIES, CLAIM & IDEMPOTENCY.", standalone_readme)
+        self.assertIn("7. DISPATCH SUGGESTION", standalone_readme)
 
     def test_install_guidance_covers_managed_workflow_state(self) -> None:
         claude_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
