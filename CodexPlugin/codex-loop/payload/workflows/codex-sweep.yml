@@ -336,11 +336,12 @@ jobs:
             if [ "$AGE" -ge 2 ]; then
               gh issue edit "$N" -R "$R" --remove-label codex-event-active >/dev/null 2>&1 || true
               gh issue edit "$N" -R "$R" --remove-label codex-event-pending >/dev/null 2>&1 || true
-              if ! COMMENTS=$(gh issue view "$N" -R "$R" --json comments --jq '.comments[].body'); then
+              if ! RETRY_MARKERS=$(gh api "repos/$R/issues/$N/comments?per_page=100" --paginate --jq \
+                '.[] | select(.user.login == "github-actions[bot]" and .body == "Previous run appears dead — retriggering via workflow dispatch. <!-- codex-dead-run-retry -->") | .id'); then
                 echo "::warning::Could not inspect retry history for issue #$N"
                 continue
               fi
-              if printf '%s\n' "$COMMENTS" | grep -q codex-dead-run-retry; then
+              if [ -n "$RETRY_MARKERS" ]; then
                 gh issue edit "$N" -R "$R" --remove-label codex-running --add-label codex-blocked
                 gh issue comment "$N" -R "$R" --body "Second apparent dead run; needs a human look."
               else

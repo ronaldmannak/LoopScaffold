@@ -23,14 +23,6 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Swap label to claude-running (dedup + visible state)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue edit "${{ github.event.issue.number }}" \
-            --repo "${{ github.repository }}" \
-            --remove-label claude-build --add-label claude-running
-
       # Only the issue NUMBER and URL are sent — never the title or body,
       # so labeled-issue content can't inject into the trigger payload.
       # The routine reads the full issue itself with `gh issue view`.
@@ -50,14 +42,14 @@ jobs:
               -H "Content-Type: application/json" \
               -d @-
 
-      - name: Block claimed issue on dispatch failure
+      - name: Block issue on dispatch failure
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue edit "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --remove-label claude-running --add-label claude-blocked
+            --remove-label claude-build --add-label claude-blocked
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "Claude routine could not be started after this issue was claimed. It is blocked so it cannot remain stuck in claude-running. Check this workflow run, then replace 'claude-blocked' with 'claude-build' to retry."
+            --body "Claude routine could not be started. The issue remains blocked until this workflow is fixed; then replace 'claude-blocked' with 'claude-build' to retry."

@@ -62,6 +62,27 @@ def git_subcommand(start: int, end: int):
             return token, index
     return "", end
 
+def git_defines_command_alias(start: int, end: int) -> bool:
+    def is_alias_setting(setting: str) -> bool:
+        key = setting.split("=", 1)[0].strip().lower()
+        return key.startswith("alias.")
+
+    index = start + 1
+    while index < end:
+        token = tokens[index]
+        if token in {"-c", "--config-env"}:
+            index += 1
+            if index < end and is_alias_setting(tokens[index]):
+                return True
+        elif token.startswith("-c") and token != "-c":
+            if is_alias_setting(token[2:]):
+                return True
+        elif token.startswith("--config-env="):
+            if is_alias_setting(token[len("--config-env="):]):
+                return True
+        index += 1
+    return False
+
 def protected_ref(argument: str) -> bool:
     ref = argument.lstrip("+")
     if ":" in ref:
@@ -147,6 +168,47 @@ def test_path(argument: str) -> bool:
         or (name.endswith(".swift") and (name.startswith("test") or name.endswith("tests.swift")))
     )
 
+policy_path = re.compile(
+    r"(^|[^A-Za-z0-9_.-])(?:"
+    r"\.(?:claude|codex|agents)(?=/|$|[^A-Za-z0-9_.-])"
+    r"|\.github/workflows(?=/|$|[^A-Za-z0-9_.-])"
+    r"|AGENTS\.md(?=$|[^A-Za-z0-9_.-]))"
+)
+
+def protected_policy_path(value: str) -> bool:
+    return bool(policy_path.search(value.replace("\\", "/")))
+
+def redirects_to_policy() -> bool:
+    for index, token in enumerate(tokens[:-1]):
+        if ">" in token and all(character in "<>&|" for character in token):
+            if protected_policy_path(tokens[index + 1]):
+                return True
+    return False
+
+def command_writes_policy(name: str, start: int, end: int) -> bool:
+    arguments = tokens[start + 1:end]
+    if not any(protected_policy_path(argument) for argument in arguments):
+        return False
+    if name in {
+        "cp", "mv", "install", "touch", "mkdir", "rmdir", "rm", "truncate",
+        "chmod", "chown", "chgrp", "ln", "tee", "patch", "ed", "ex", "dd",
+    }:
+        return True
+    if name.startswith("python") or name in {"node", "ruby", "perl", "php", "awk", "gawk", "mawk"}:
+        return True
+    if name == "sed":
+        return any(
+            argument == "-i" or argument.startswith("-i")
+            or argument == "--in-place" or argument.startswith("--in-place=")
+            for argument in arguments
+        )
+    if name == "find":
+        return "-delete" in arguments
+    if name == "git":
+        subcommand, _ = git_subcommand(start, end)
+        return subcommand in {"add", "checkout", "restore", "rm", "mv", "clean", "reset"}
+    return False
+
 def positional_arguments(start: int, end: int, takes_value: set[str]) -> list[str]:
     values = []
     index = start
@@ -225,14 +287,20 @@ def block(label: str):
 
 if has_active_dynamic_evaluation(command):
     block("dynamic shell evaluation")
+if redirects_to_policy():
+    block("writing policy/CI files through Bash")
 
 for index, token in enumerate(tokens):
     name = executable(token)
     end = command_end(index + 1)
+    if command_writes_policy(name, index, end):
+        block("writing policy/CI files through Bash")
     if name == "eval":
         block("dynamic shell evaluation")
     elif name == "git":
         subcommand, sub_index = git_subcommand(index, end)
+        if git_defines_command_alias(index, sub_index):
+            block("command-local Git alias")
         arguments = tokens[sub_index + 1:end]
         if subcommand == "push":
             if push_uses_force(arguments):

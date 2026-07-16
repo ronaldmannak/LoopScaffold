@@ -409,6 +409,46 @@ class PolicyHookTests(unittest.TestCase):
                     result = invoke_hook(hook, {"tool_input": {"command": command}})
                     self.assertEqual(0, result.returncode)
 
+    def test_bash_guards_block_command_local_git_aliases(self) -> None:
+        blocked = (
+            "git -c alias.ship='push --force' ship origin main",
+            "git -calias.land='push origin HEAD:main' land",
+            "git --config-env=alias.merge=MERGE_ALIAS merge 42",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, command=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("command-local Git alias", result.stderr)
+            safe = invoke_hook(hook, {"tool_input": {"command": "git -c color.ui=false status"}})
+            self.assertEqual(0, safe.returncode)
+
+    def test_bash_guards_block_policy_writes(self) -> None:
+        blocked = (
+            "printf data > .github/workflows/ci.yml",
+            "sed -i s/old/new/ .codex/hooks.json",
+            "sed --in-place=suffix s/old/new/ .claude/settings.json",
+            'python3 -c "from pathlib import Path; Path(\'AGENTS.md\').write_text(\'x\')"',
+            "tee .agents/config.toml",
+        )
+        safe = (
+            "cat AGENTS.md",
+            "sed -n 1p .codex/hooks.json",
+            "bash .codex/scripts/checks.sh --quick",
+            "git diff -- .github/workflows/ci.yml",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, blocked=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("writing policy/CI files through Bash", result.stderr)
+            for command in safe:
+                with self.subTest(product=product, safe=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(0, result.returncode)
+
     def test_bash_guards_block_implicit_pushes_from_protected_branches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
@@ -559,6 +599,27 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("github.event.issue.pull_request", converge)
         self.assertIn("REASON=conversation-comment", converge)
         self.assertIn("event:conversation-comment", trigger)
+
+    def test_codex_converger_rejects_fork_owned_prs(self) -> None:
+        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        self.assertIn("github.event.workflow_run.head_repository.full_name == github.repository", converge)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", converge)
+        self.assertIn(".isCrossRepository | not", converge)
+        self.assertIn("Ignoring closed or fork-owned PR", converge)
+
+    def test_dead_run_retry_markers_are_actions_bot_authenticated(self) -> None:
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        self.assertIn('.user.login == "github-actions[bot]"', sweep)
+        self.assertIn('.body == "Previous run appears dead — retriggering via workflow dispatch. <!-- codex-dead-run-retry -->"', sweep)
+        self.assertIn('[ -n "$RETRY_MARKERS" ]', sweep)
+
+    def test_claude_fallback_leaves_the_build_label_for_the_routine_claim(self) -> None:
+        standalone = (ROOT / "ClaudeCode-script/.claude/fallback/claude-build-trigger.yml").read_text()
+        plugin = (ROOT / "ClaudeCodePlugin/claude-loop/payload/fallback/claude-build-trigger.yml").read_text()
+        self.assertEqual(standalone, plugin)
+        self.assertNotIn("Swap label to claude-running", plugin)
+        self.assertNotIn("--remove-label claude-build --add-label claude-running", plugin)
+        self.assertIn("--remove-label claude-build --add-label claude-blocked", plugin)
 
     def test_sweeper_uses_current_loop_activity_before_recovery(self) -> None:
         sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()

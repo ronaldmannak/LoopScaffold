@@ -15,8 +15,10 @@ jobs:
   dispatch:
     if: >
       (github.event_name == 'workflow_run'
+        && github.event.workflow_run.head_repository.full_name == github.repository
         && startsWith(github.event.workflow_run.head_branch, 'codex/'))
       || (github.event_name == 'pull_request_review'
+        && github.event.pull_request.head.repo.full_name == github.repository
         && startsWith(github.event.pull_request.head.ref, 'codex/'))
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
@@ -37,7 +39,7 @@ jobs:
         run: |
           if [ "$EVENT_NAME" = issue_comment ]; then
             PR="$EVENT_PR"
-            if ! BRANCH=$(gh pr view "$PR" -R "$R" --json headRefName,state --jq 'select(.state == "OPEN") | .headRefName // ""'); then
+            if ! BRANCH=$(gh pr view "$PR" -R "$R" --json headRefName,isCrossRepository,state --jq 'select(.state == "OPEN" and (.isCrossRepository | not)) | .headRefName // ""'); then
               echo "::error::Could not inspect pull request #$PR"
               exit 1
             fi
@@ -56,10 +58,16 @@ jobs:
           fi
           [ -z "$PR" ] && exit 0
           case "$BRANCH" in codex/*) ;; *) exit 0;; esac
-          if ! BODY=$(gh pr view "$PR" -R "$R" --json body --jq '.body // ""'); then
+          if ! PR_DATA=$(gh pr view "$PR" -R "$R" --json body,isCrossRepository,state); then
             echo "::error::Could not read PR #$PR"
             exit 1
           fi
+          if [ "$(printf '%s' "$PR_DATA" | jq -r '.state')" != OPEN ] || \
+             [ "$(printf '%s' "$PR_DATA" | jq -r '.isCrossRepository')" != false ]; then
+            echo "::notice::Ignoring closed or fork-owned PR #$PR"
+            exit 0
+          fi
+          BODY=$(printf '%s' "$PR_DATA" | jq -r '.body // ""')
           N=$(printf '%s\n' "$BODY" | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
           [ -z "$N" ] && exit 0
           if ! LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
