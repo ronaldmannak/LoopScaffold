@@ -6,7 +6,7 @@
 #   --quick = build, or first configured check when no build
 #   --clean = tool-native clean first
 #   --list-ci-checks = print configured required CI context names and exit
-# Output: one summary line per step; full logs in .claude/.checks/.
+# Output: one summary line per step; full logs in .codex/.checks/.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -36,7 +36,7 @@ if $LIST_CI_CHECKS; then
   fi
   exit 0
 fi
-LOG_DIR=".claude/.checks"; mkdir -p "$LOG_DIR"
+LOG_DIR=".codex/.checks"; mkdir -p "$LOG_DIR"
 [[ -f "$LOG_DIR/.gitignore" ]] || echo "*" > "$LOG_DIR/.gitignore"   # never commit logs
 STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
 

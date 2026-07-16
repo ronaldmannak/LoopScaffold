@@ -1,0 +1,87 @@
+name: Codex converge trigger
+# Starts another repository-connected Codex cloud task when CI or PR feedback gives an open Codex PR new work.
+on:
+  workflow_run:
+    workflows: ["CI"]            # <-- set to your CI workflow's name (Actions CI only; external CI wakes codex-sweep through check/status events instead)
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+concurrency:
+  group: codex-converge-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.event.issue.number }}
+  cancel-in-progress: true
+jobs:
+  dispatch:
+    if: >
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.head_repository.full_name == github.repository
+        && startsWith(github.event.workflow_run.head_branch, 'codex/'))
+      || (github.event_name == 'pull_request_review'
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && startsWith(github.event.pull_request.head.ref, 'codex/'))
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.login != 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Dispatch the linked issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          EVENT_PR: ${{ github.event.issue.number }}
+          R: ${{ github.repository }}
+        run: |
+          if [ "$EVENT_NAME" = issue_comment ]; then
+            PR="$EVENT_PR"
+            if ! BRANCH=$(gh pr view "$PR" -R "$R" --json headRefName,isCrossRepository,state --jq 'select(.state == "OPEN" and (.isCrossRepository | not)) | .headRefName // ""'); then
+              echo "::error::Could not inspect pull request #$PR"
+              exit 1
+            fi
+            REASON=conversation-comment
+          else
+            BRANCH="$EVENT_BRANCH"
+            if ! PR=$(gh pr list -R "$R" --head "$BRANCH" --state open --json number --jq '.[0].number // ""'); then
+              echo "::error::Could not find the pull request for $BRANCH"
+              exit 1
+            fi
+            if [ "$EVENT_NAME" = workflow_run ]; then
+              REASON=ci-completed
+            else
+              REASON=review-submitted
+            fi
+          fi
+          [ -z "$PR" ] && exit 0
+          case "$BRANCH" in codex/*) ;; *) exit 0;; esac
+          if ! PR_DATA=$(gh pr view "$PR" -R "$R" --json body,isCrossRepository,state); then
+            echo "::error::Could not read PR #$PR"
+            exit 1
+          fi
+          if [ "$(printf '%s' "$PR_DATA" | jq -r '.state')" != OPEN ] || \
+             [ "$(printf '%s' "$PR_DATA" | jq -r '.isCrossRepository')" != false ]; then
+            echo "::notice::Ignoring closed or fork-owned PR #$PR"
+            exit 0
+          fi
+          BODY=$(printf '%s' "$PR_DATA" | jq -r '.body // ""')
+          N=$(printf '%s\n' "$BODY" | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+          [ -z "$N" ] && exit 0
+          if ! LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
+            echo "::error::Could not inspect linked issue #$N"
+            exit 1
+          fi
+          if printf '%s\n' "$LABELS" | grep -Fxq codex-ready; then
+            EXPECTED=codex-ready
+          elif printf '%s\n' "$LABELS" | grep -Fxq codex-running; then
+            EXPECTED=codex-running
+          else
+            echo "::notice::Linked issue #$N is not active; ignoring stale converge event"
+            exit 0
+          fi
+          gh workflow run codex-build-trigger.yml -R "$R" \
+            -f issue_number="$N" -f expected_label="$EXPECTED" \
+            -f mode=event -f reason="$REASON"

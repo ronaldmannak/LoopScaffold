@@ -1,7 +1,6 @@
 ---
 name: plan-to-issue
 description: Convert the plan approved in this session into a self-contained GitHub issue that an unattended routine can implement. Use when the human approves a plan, says "make this an issue", "file it", or invokes /plan-to-issue. NEVER implement the plan in the current session.
-disable-model-invocation: false
 ---
 
 # Plan → Issue
@@ -24,10 +23,10 @@ The approved plan, step by step. Exact file paths where known.
 ## Acceptance criteria
 - [ ] Deterministic, checkable criteria only (tests that must pass,
       observable behaviors, commands whose output must contain X)
-- [ ] All checks in .claude/scripts/checks.sh pass
+- [ ] All checks in .codex/scripts/checks.sh pass
 
 ## Dependencies
-If this plan requires another claude-build issue to merge first, add a line
+If this plan requires another codex-build issue to merge first, add a line
 "Depends-on: #<n>" to the body — the routine parks dependent issues until
 the dependency merges, so you can safely file and label a whole batch at once.
 
@@ -35,22 +34,22 @@ the dependency merges, so you can safely file and label a whole batch at once.
 Explicit non-goals, so the implementer doesn't expand scope.
 
 ## Constraints
-- Follow .claude/rules/ (simplicity, testing, git)
+- Follow the AGENTS.md loop rules
 - Open the PR ready for review; never merge
 ```
 
 ## Policy-change plans are NOT routine-buildable
 
-If the approved plan requires changes under `.claude/` or `.github/workflows/` (rules, hooks, checks.sh, CI definitions), do NOT apply the `claude-build` label — loop policy and hooks put those paths outside unattended scope. Create the issue WITHOUT the label, note "requires human-supervised implementation" in the body, and tell the human to implement it in an interactive session where they approve each change.
+If the approved plan requires changes under `.codex/`, `.agents/`, `AGENTS.md`, or `.github/workflows/` (rules, hooks, checks.sh, skills, CI definitions), do NOT apply the `codex-build` label — loop policy and hooks put those paths outside unattended scope. Create the issue WITHOUT the label, note "requires human-supervised implementation" in the body, and tell the human to implement it in an interactive session where they approve each change.
 
 ## Procedure
 
 1. Draft the issue body; show the human for a quick confirm.
 2. Choose exactly one creation path:
-   - Routine-buildable plan: `gh issue create --title "..." --body "..." --label claude-build`
+   - Routine-buildable plan: `gh issue create --title "..." --body "..." --label codex-build`
    - Policy-change plan: include "requires human-supervised implementation"
      in the body and run `gh issue create --title "..." --body "..."` with
      no build label.
 3. Report the issue URL. Only the routine-buildable path applies
-   `claude-build`, which fires the Issue: Labeled routine — never apply it to an
+   `codex-build`, which fires the supported Codex build workflow — never apply it to an
    issue that isn't ready for unattended implementation.
