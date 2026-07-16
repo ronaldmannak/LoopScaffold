@@ -40,7 +40,7 @@ Explicit non-goals, so the implementer doesn't expand scope.
 
 ## Policy-change plans are NOT routine-buildable
 
-If the approved plan requires changes under `.codex/`, `.agents/skills/`, `AGENTS.md`, or `.github/workflows/` (rules, hooks, checks.sh, skills, CI definitions), do NOT apply the `codex-build` label — loop policy and hooks put those paths outside unattended scope. Create the issue WITHOUT the label, note "requires human-supervised implementation" in the body, and tell the human to implement it in an interactive session where they approve each change.
+If the approved plan requires changes under `.codex/`, `.agents/`, `AGENTS.md`, or `.github/workflows/` (rules, hooks, checks.sh, skills, CI definitions), do NOT apply the `codex-build` label — loop policy and hooks put those paths outside unattended scope. Create the issue WITHOUT the label, note "requires human-supervised implementation" in the body, and tell the human to implement it in an interactive session where they approve each change.
 
 ## Procedure
 

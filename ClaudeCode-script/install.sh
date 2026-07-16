@@ -146,10 +146,14 @@ cat << 'EOD'
   4. Inspect existing branch/ruleset protection without changing it. If this
      repo has no merge gate, configure one manually in GitHub. Required checks
      appear only after reporting once, so a throwaway PR may be needed.
-  5. Swift repos: paste .claude/templates/cloud-setup-swift.sh into the
+  5. Enable Codex code review and automatic reviews for this repository. The
+     routine requests @codex review after 20 minutes and blocks for human
+     intervention if neither a Codex-bot thumbs-up nor a submitted review
+     arrives within 60 minutes of that request.
+  6. Swift repos: paste .claude/templates/cloud-setup-swift.sh into the
      routine environment's setup script (once). Toolchain version updates
      afterwards happen by editing .swift-version in the repo — NOT the
      pasted script. Verify on the first run that the transcript shows
      "Required Swift >= X (from ./.swift-version)".
-  6. Smoke test: one trivial labeled issue, read the whole transcript.
+  7. Smoke test: one trivial labeled issue, read the whole transcript.
 EOD

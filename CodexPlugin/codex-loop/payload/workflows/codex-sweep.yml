@@ -1,7 +1,8 @@
 name: Codex queue sweep
 # Pure orchestration; model work is started through workflow_dispatch.
 on:
-  schedule: [{ cron: "17 * * * *" }]
+  # Half-hour backstop for the review deadlines; real CI/review events still wake immediately.
+  schedule: [{ cron: "7,37 * * * *" }]
   workflow_dispatch:
   issues:
     types: [unlabeled]
@@ -47,11 +48,9 @@ jobs:
               gh issue edit "$N" -R "$R" --remove-label codex-event-pending >/dev/null 2>&1 || true
               continue
             fi
-            if gh workflow run codex-build-trigger.yml -R "$R" \
+            if ! gh workflow run codex-build-trigger.yml -R "$R" \
               -f issue_number="$N" -f expected_label="$EXPECTED" \
               -f mode=event -f reason=coalesced-event; then
-              gh issue edit "$N" -R "$R" --remove-label codex-event-pending >/dev/null 2>&1 || true
-            else
               echo "::error::Could not dispatch the coalesced event for issue #$N"
               exit 1
             fi
@@ -118,6 +117,21 @@ jobs:
             fi
           }
 
+          dispatch_review_wake() {
+            local issue="$1"
+            if printf '%s\n' "$STATE_LABELS" | grep -Fxq codex-event-pending; then
+              echo "::notice::Review wake for issue #$issue is already pending"
+              return 0
+            fi
+            if ! gh issue edit "$issue" -R "$R" --add-label codex-event-pending >/dev/null; then
+              echo "::error::Could not preserve the review wake for issue #$issue"
+              return 1
+            fi
+            gh workflow run codex-build-trigger.yml -R "$R" \
+              -f issue_number="$issue" -f expected_label=codex-running \
+              -f mode=event -f reason=review-deadline
+          }
+
           if ! ISSUES=$(gh issue list -R "$R" --limit 1000 --label codex-running --state open --json number --jq '.[].number'); then
             echo "::error::Could not list running issues"
             exit 1
@@ -167,6 +181,94 @@ jobs:
                   continue
                 fi
                 record_activity "$PR_ACTIVITY" || continue
+
+                if ! ISSUE_COMMENTS=$(gh api "repos/$R/issues/$N/comments?per_page=100" --paginate --jq '.[].body'); then
+                  echo "::warning::Could not inspect loop markers for issue #$N"
+                  continue
+                fi
+                if ! COMMIT_EPOCH=$(date -d "$COMMIT_UPDATED" +%s); then
+                  echo "::warning::Could not parse head timestamp for $HEAD_SHA"
+                  continue
+                fi
+                PUSH_MARKER=$(printf '%s\n' "$ISSUE_COMMENTS" | grep -oE "codex-head-pushed $HEAD_SHA [0-9]+" | tail -1 || true)
+                if [ -n "$PUSH_MARKER" ]; then
+                  HEAD_PUSH_EPOCH=${PUSH_MARKER##* }
+                else
+                  HEAD_PUSH_EPOCH=$COMMIT_EPOCH
+                  echo "::notice::No push marker for $HEAD_SHA; using commit time for update compatibility"
+                fi
+                if ! PUSH_CUTOFF=$(date -u -d "@$HEAD_PUSH_EPOCH" +%Y-%m-%dT%H:%M:%SZ); then
+                  echo "::warning::Could not parse push marker for $HEAD_SHA"
+                  continue
+                fi
+                NOW_EPOCH=$(date +%s)
+
+                if ! REVIEW_ROWS=$(gh api "repos/$R/pulls/$PR_NUMBER/reviews?per_page=100" --paginate \
+                  --jq '.[] | [.id, .commit_id, .user.login] | @tsv'); then
+                  echo "::warning::Could not inspect Codex reviews for PR #$PR_NUMBER"
+                  continue
+                fi
+                CURRENT_REVIEW_ID=$(printf '%s\n' "$REVIEW_ROWS" | awk -F '\t' -v sha="$HEAD_SHA" \
+                  '$2 == sha && $3 == "chatgpt-codex-connector[bot]" { id=$1 } END { print id }')
+                if [ -z "$CURRENT_REVIEW_ID" ]; then
+                  if ! REQUEST_ROWS=$(gh api "repos/$R/issues/$PR_NUMBER/comments?per_page=100" --paginate \
+                    --jq '.[] | select(.body == "@codex review") | [.id, .created_at] | @tsv'); then
+                    echo "::warning::Could not inspect review requests for PR #$PR_NUMBER"
+                    continue
+                  fi
+                  CURRENT_REQUEST=$(printf '%s\n' "$REQUEST_ROWS" | awk -F '\t' -v cutoff="$PUSH_CUTOFF" \
+                    '$2 >= cutoff { row=$0 } END { print row }')
+
+                  if [ -z "$CURRENT_REQUEST" ]; then
+                    if [ $(( NOW_EPOCH - HEAD_PUSH_EPOCH )) -ge 1200 ]; then
+                      if ! dispatch_review_wake "$N"; then
+                        echo "::error::Could not dispatch the 20-minute review deadline for issue #$N"
+                        exit 1
+                      fi
+                      continue
+                    fi
+                  else
+                    REQUEST_ID=${CURRENT_REQUEST%%$'\t'*}
+                    REQUEST_AT=${CURRENT_REQUEST#*$'\t'}
+                    if ! REACTIONS=$(gh api "repos/$R/issues/comments/$REQUEST_ID/reactions?per_page=100" --paginate \
+                      --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .content'); then
+                      echo "::warning::Could not inspect Codex reactions for review request $REQUEST_ID"
+                      continue
+                    fi
+                    if printf '%s\n' "$REACTIONS" | grep -Fxq '+1'; then
+                      REVIEW_MARKER="codex-review-pass-dispatched $HEAD_SHA $REQUEST_ID"
+                      if ! printf '%s\n' "$ISSUE_COMMENTS" | grep -Fq "$REVIEW_MARKER"; then
+                        if ! dispatch_review_wake "$N"; then
+                          echo "::error::Could not dispatch the Codex approval for issue #$N"
+                          exit 1
+                        fi
+                        gh issue comment "$N" -R "$R" --body "Codex approved $HEAD_SHA — resuming convergence. <!-- $REVIEW_MARKER -->"
+                      fi
+                      continue
+                    fi
+                    if ! REQUEST_EPOCH=$(date -d "$REQUEST_AT" +%s); then
+                      echo "::warning::Could not parse review-request timestamp for PR #$PR_NUMBER"
+                      continue
+                    fi
+                    if [ $(( NOW_EPOCH - REQUEST_EPOCH )) -ge 3600 ]; then
+                      if ! dispatch_review_wake "$N"; then
+                        echo "::error::Could not dispatch the 60-minute review deadline for issue #$N"
+                        exit 1
+                      fi
+                      continue
+                    fi
+                  fi
+                else
+                  REVIEW_MARKER="codex-review-submitted-dispatched $HEAD_SHA $CURRENT_REVIEW_ID"
+                  if ! printf '%s\n' "$ISSUE_COMMENTS" | grep -Fq "$REVIEW_MARKER"; then
+                    if ! dispatch_review_wake "$N"; then
+                      echo "::error::Could not dispatch submitted Codex review for issue #$N"
+                      exit 1
+                    fi
+                    gh issue comment "$N" -R "$R" --body "Codex reviewed $HEAD_SHA — resuming convergence. <!-- $REVIEW_MARKER -->"
+                  fi
+                  continue
+                fi
               fi
 
               if ! CHECK_RUNS=$(gh api "repos/$R/commits/$HEAD_SHA/check-runs?per_page=100"); then

@@ -22,7 +22,7 @@ on:
         description: Trusted wake reason included in the task prompt
         required: true
         type: choice
-        options: [manual-build, dependency-resume, dead-run-retry, ci-completed, review-submitted, conversation-comment, external-ci, rebase-conflict, coalesced-event]
+        options: [manual-build, dependency-resume, dead-run-retry, ci-completed, review-submitted, conversation-comment, external-ci, review-deadline, rebase-conflict, coalesced-event]
 concurrency:
   group: codex-build-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
@@ -52,7 +52,7 @@ jobs:
           esac
           case "$MODE:$REASON" in
             build:issue-labeled|build:manual-build|build:dependency-resume|build:dead-run-retry) ;;
-            event:ci-completed|event:review-submitted|event:conversation-comment|event:external-ci|event:rebase-conflict|event:coalesced-event) ;;
+            event:ci-completed|event:review-submitted|event:conversation-comment|event:external-ci|event:review-deadline|event:rebase-conflict|event:coalesced-event) ;;
             *) echo "::error::Invalid mode/reason pair: $MODE/$REASON"; exit 2;;
           esac
 

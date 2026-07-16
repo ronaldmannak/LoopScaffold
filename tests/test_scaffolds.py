@@ -213,6 +213,27 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn("Xcode project detected", result.stderr)
 
+    def test_manually_configured_test_only_checks_skip_autodetection(self) -> None:
+        for product, source in (
+            ("claude-standalone", ROOT / "ClaudeCode-script/.claude/scripts/checks.sh"),
+            ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/checks.sh"),
+            ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/checks.sh"),
+        ):
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = repo / "checks.sh"
+                script.write_text(source.read_text().replace(
+                    "BUILD=(); TEST=(); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()",
+                    "BUILD=(); TEST=(true); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()",
+                    1,
+                ))
+                full = run("/bin/bash", script, cwd=repo)
+                quick = run("/bin/bash", script, "--quick", cwd=repo)
+                self.assertIn("test: PASS", full.stdout)
+                self.assertIn("build: SKIPPED", quick.stdout)
+                self.assertIn("test: PASS", quick.stdout)
+
 
 class PolicyHookTests(unittest.TestCase):
     def test_protect_hooks_fail_closed_on_malformed_input(self) -> None:
@@ -451,10 +472,10 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("issue_number:", trigger)
         self.assertIn("expected_label:", trigger)
         self.assertIn("actions: write", sweep)
-        self.assertEqual(5, sweep.count("gh workflow run codex-build-trigger.yml"))
-        self.assertEqual(5, sweep.count("-f expected_label="))
-        self.assertEqual(5, sweep.count("-f mode="))
-        self.assertEqual(5, sweep.count("-f reason="))
+        self.assertEqual(6, sweep.count("gh workflow run codex-build-trigger.yml"))
+        self.assertEqual(6, sweep.count("-f expected_label="))
+        self.assertEqual(6, sweep.count("-f mode="))
+        self.assertEqual(6, sweep.count("-f reason="))
         self.assertEqual(4, sweep.count("--limit 1000"))
         self.assertNotIn("--add-label codex-build", sweep)
 
@@ -495,6 +516,9 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("types: [unlabeled]", sweep)
         self.assertIn("remove `codex-event-active`", iteration)
         self.assertIn("Never remove `codex-event-pending`", iteration)
+        coalesced = sweep[sweep.index("Dispatch a coalesced event"):sweep.index("Unpark merged dependencies")]
+        self.assertEqual(1, coalesced.count("--remove-label codex-event-pending"))
+        self.assertIn("if ! gh workflow run codex-build-trigger.yml", coalesced)
 
     def test_codex_claim_adds_recoverable_state_before_removing_old_state(self) -> None:
         trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
@@ -584,6 +608,49 @@ class ReviewRegressionTests(unittest.TestCase):
                 skill = (ROOT / path).read_text()
                 self.assertIn("Choose exactly one creation path", skill)
                 self.assertIn('gh issue create --title "..." --body "..."` with\n     no build label', skill)
+        codex = (ROOT / "CodexPlugin/codex-loop/payload/skills/plan-to-issue/SKILL.md").read_text()
+        self.assertIn("`.agents/`", codex)
+        self.assertNotIn("`.agents/skills/`", codex)
+
+    def test_review_protocol_uses_20_60_deadlines_and_codex_reactions(self) -> None:
+        skill_paths = (
+            "ClaudeCode-script/.claude/skills/pr-iteration/SKILL.md",
+            "ClaudeCodePlugin/claude-loop/payload/skills/pr-iteration/SKILL.md",
+            "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md",
+        )
+        for path in skill_paths:
+            with self.subTest(path=path):
+                skill = (ROOT / path).read_text()
+                self.assertIn("20 minutes after the CURRENT head", skill)
+                self.assertIn("60 minutes pass after that request", skill)
+                self.assertIn("👀", skill)
+                self.assertIn("👍", skill)
+                self.assertIn("chatgpt-codex-connector[bot]", skill)
+                self.assertIn("Do not proceed on internal review alone", skill)
+
+        routine = (ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md").read_text()
+        standalone = (ROOT / "ClaudeCode-script/README.md").read_text()
+        self.assertIn("20 minutes after pushing", routine)
+        self.assertIn("Stay subscribed for 60 minutes", routine)
+        self.assertIn(routine, standalone)
+
+    def test_codex_sweeper_dispatches_durable_review_deadlines(self) -> None:
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        trigger = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        iteration = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()
+        self.assertIn('cron: "7,37 * * * *"', sweep)
+        self.assertIn("dispatch_review_wake", sweep)
+        self.assertIn("--add-label codex-event-pending", sweep)
+        self.assertIn("review-deadline", sweep)
+        self.assertIn("codex-head-pushed", iteration)
+        self.assertIn("codex-head-pushed", sweep)
+        self.assertIn("HEAD_PUSH_EPOCH", sweep)
+        self.assertIn("PUSH_CUTOFF", sweep)
+        self.assertIn("-ge 1200", sweep)
+        self.assertIn("-ge 3600", sweep)
+        self.assertIn("issues/comments/$REQUEST_ID/reactions", sweep)
+        self.assertIn("chatgpt-codex-connector[bot]", sweep)
+        self.assertIn("review-deadline", trigger)
 
     def test_claude_has_one_subscribing_routine_and_no_split_converger(self) -> None:
         routine = (ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md").read_text()

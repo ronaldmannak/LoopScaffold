@@ -95,7 +95,11 @@ steps. It never changes branch protection or rulesets. Manual equivalent:
    | Gotchas | macOS runners are slow/expensive | check appears in branch-protection dropdown only after reporting once; logs live in App Store Connect (diagnostician falls back to annotations) | put both exact context names in `EXPECTED_CI_CHECKS` inside checks.sh so an early Actions check cannot hide the later Xcode Cloud check |
    Then protect `main` (require PR + the chosen check(s) passing).
    Note: routines can only push `claude/`-prefixed branches by default — leave that as is.
-6. Verify empirically once: open a throwaway issue with the label and watch
+6. Enable Codex code review and automatic reviews for the repository. The
+   external-review gate requests `@codex review` after 20 minutes and blocks
+   for human intervention if neither 👍 nor a submitted review arrives within
+   60 minutes of that request.
+7. Verify empirically once: open a throwaway issue with the label and watch
    the run at claude.ai/code end-to-end.
 
 ## The kickoff prompt (interactive session)
@@ -170,10 +174,14 @@ GOAL — do not stop until ALL of these are true, or a cap is hit:
    minutes that verifies real PR state (subscriptions can drop events);
    (2) otherwise the blocking `gh pr checks --watch`; (3) otherwise
    scheduled check-ins alone, at most 5 minutes — NEVER an hour.
-   Codex sometimes fails to trigger: if no external review exists for the
-   current head 10 minutes after pushing, comment `@codex review` (once
-   per head SHA); if still nothing 10 minutes later, note it in the PR
-   description and proceed on internal review + CI alone.
+   External-review protocol, per head SHA: if neither a submitted review
+   nor a Codex-bot 👍 exists 20 minutes after pushing, comment exactly
+   `@codex review` once. A Codex-bot 👀 means accepted/in progress only;
+   👍 means completed with no findings. Stay subscribed for 60 minutes
+   after the request. If neither 👍 nor a submitted review arrives, report
+   the SHA, CI state, and request time, then move the issue to
+   claude-blocked for human intervention. Never proceed on internal review
+   alone, and reset both deadlines after every new push.
    8-iteration cap, 3-strikes breaker, mandatory completion consistency
    check. Use the ci-diagnostician agent for failed runs instead of
    reading raw logs.

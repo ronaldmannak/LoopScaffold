@@ -40,7 +40,7 @@ LOG_DIR=".claude/.checks"; mkdir -p "$LOG_DIR"
 [[ -f "$LOG_DIR/.gitignore" ]] || echo "*" > "$LOG_DIR/.gitignore"   # never commit logs
 STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
 
-if [[ ${#BUILD[@]} -eq 0 ]]; then
+if [[ ${#BUILD[@]} -eq 0 && ${#TEST[@]} -eq 0 && ${#LINT[@]} -eq 0 ]]; then
   if compgen -G "*.xcodeproj" >/dev/null || compgen -G "*.xcworkspace" >/dev/null; then
     echo "checks.sh: Xcode project detected — configure BUILD/TEST arrays in this script." >&2
     exit 1

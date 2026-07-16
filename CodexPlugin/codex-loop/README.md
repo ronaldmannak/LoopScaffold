@@ -10,12 +10,16 @@ trigger/converge/sweep orchestration is three GitHub Actions. Build and
 convergence delegate to repository-connected Codex cloud tasks through the
 documented [`@codex` issue mention](https://learn.chatgpt.com/docs/changelog#codex-2025-10-22).
 This scaffold does not require a repository API secret or invoke the separately
-billed API action. The optional external-review fallback uses the documented
+billed API action. The external-review gate uses the documented
 [`@codex review`](https://learn.chatgpt.com/docs/third-party/github) PR comment.
 The sweeper is pure bash — label mechanics need no model. External CI wakes it
 through GitHub's `check_run` or `status` events; a head-SHA/completion-time
-marker makes each completed result dispatch exactly once, and the hourly run
-remains a missed-event fallback.
+marker makes each completed result dispatch exactly once, and the scheduled run
+remains a missed-event fallback. The same sweeper checks review state every
+30 minutes: after 20 minutes without a result it wakes a one-time manual
+review request, and 60 minutes without a Codex-bot 👍 or submitted review
+blocks the issue for human intervention. A 👀 reaction means only that Codex
+accepted the request; 👍 means it completed with no findings.
 
 The initial cloud task runs in BUILD MODE and exits after pushing its PR;
 CI/review/comment wakes run separately in EVENT MODE and act once. Persistent

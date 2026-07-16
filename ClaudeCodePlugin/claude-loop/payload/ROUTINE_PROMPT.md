@@ -54,10 +54,14 @@ GOAL — do not stop until ALL of these are true, or a cap is hit:
    minutes that verifies real PR state (subscriptions can drop events);
    (2) otherwise the blocking `gh pr checks --watch`; (3) otherwise
    scheduled check-ins alone, at most 5 minutes — NEVER an hour.
-   Codex sometimes fails to trigger: if no external review exists for the
-   current head 10 minutes after pushing, comment `@codex review` (once
-   per head SHA); if still nothing 10 minutes later, note it in the PR
-   description and proceed on internal review + CI alone.
+   External-review protocol, per head SHA: if neither a submitted review
+   nor a Codex-bot 👍 exists 20 minutes after pushing, comment exactly
+   `@codex review` once. A Codex-bot 👀 means accepted/in progress only;
+   👍 means completed with no findings. Stay subscribed for 60 minutes
+   after the request. If neither 👍 nor a submitted review arrives, report
+   the SHA, CI state, and request time, then move the issue to
+   claude-blocked for human intervention. Never proceed on internal review
+   alone, and reset both deadlines after every new push.
    8-iteration cap, 3-strikes breaker, mandatory completion consistency
    check. Use the ci-diagnostician agent for failed runs instead of
    reading raw logs.
