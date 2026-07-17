@@ -1,0 +1,20 @@
+{
+  "name": "loop-scaffold",
+  "interface": {
+    "displayName": "LoopScaffold"
+  },
+  "plugins": [
+    {
+      "name": "codex-loop",
+      "source": {
+        "source": "local",
+        "path": "./CodexPlugin/codex-loop"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

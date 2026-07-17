@@ -1,22 +1,69 @@
-# Claude Code loop scaffolding (v4)
+# Standalone Claude Code loop
 
 Reusable scaffold: **plan in chat → issue as contract → one routine
 implements, opens a PR, and converges it using blocking watches (token-free
 waiting, instant wake on CI completion) → claude-ready → human merges.**
 
-v3: native GitHub trigger "Issue: Labeled" + Labels filter;
-the Action bridge is kept inert in .claude/fallback/.
-v4 (second external review): label state machine with terminal states and
-label-driven resume; Bash guard blocking dangerous git/gh commands; head-SHA
-consistency check before completion claims; review-comment triage; a
-ci-diagnostician subagent so raw CI logs stay out of the main context;
-policy-change issues routed away from the routine; softened simplicity rules;
-checks.sh polish. The test hook is documented as a tripwire, not proof.
-v7/v8: no more fixed sleeps. A routine subscribes to PR activity when that
-capability is available and always keeps a bounded backstop; otherwise
-`gh pr checks --watch` blocks without spending tokens and returns when CI
-completes. One routine owns implementation and convergence from start to
-terminal state.
+## Choose this distribution
+
+Use this standalone script when you cannot or do not want to install the
+[Claude Code plugin](../ClaudeCodePlugin/README.md). The script installs the
+repository runtime directly from a LoopScaffold checkout. Routine configuration
+still happens manually because Anthropic stores it in your account rather than
+the repository.
+
+Do not use the standalone script and Claude plugin in the same target
+repository. They manage the same `.claude/` files; choose one method and use it
+for subsequent updates.
+
+## Install the scaffold
+
+Prerequisites are Git, Bash, Python 3, and a target GitHub repository. Install
+and authenticate the GitHub CLI if you want the script to create labels:
+
+```bash
+gh auth status
+```
+
+From a LoopScaffold checkout, run:
+
+```bash
+cd ClaudeCode-script
+./install.sh /absolute/path/to/your/repository
+```
+
+For a repository that should use the included GitHub Actions CI template, add
+`--with-actions-ci`:
+
+```bash
+./install.sh /absolute/path/to/your/repository --with-actions-ci
+```
+
+Do not use that flag when the project already has `.github/workflows/ci.yml` or
+uses Xcode Cloud or another external CI provider. The installer never
+overwrites an existing workflow.
+
+The command merges the loop-owned Claude hooks into existing settings, copies
+the managed `.claude/` files, preserves an existing customized
+`.claude/scripts/checks.sh`, creates missing labels when `gh` is authenticated,
+and prints the remaining manual steps. Review its output and the resulting
+repository diff before committing.
+
+Run the same command again to update the scaffold. The installer is idempotent
+and continues to preserve the project-owned checks configuration.
+
+## Finish setup
+
+After installation, continue with [Setup per project](#setup-per-project). You
+must configure the checks the project actually uses, create the Claude routine,
+choose a CI provider, verify merge gates, and smoke-test one trivial issue.
+
+## Installed files
+
+The current scaffold uses Claude Code's native **Issue: Labeled** trigger. One
+routine owns implementation and convergence until the issue reaches
+`claude-ready` or `claude-blocked`; the fallback GitHub Action remains inert
+unless you choose to enable it.
 
 ```text
 .claude/
@@ -45,20 +92,15 @@ terminal state.
 
 ## Setup per project
 
-Quickstart — from the unzipped scaffold directory:
-```bash
-./install.sh /path/to/repo [--with-actions-ci]
-```
-Idempotent: run it again after scaffold updates; it refreshes everything
-EXCEPT your customized checks.sh. Existing settings are merged field-by-field:
-unrelated keys and hooks remain intact, and invalid JSON is left untouched.
-It also creates the labels (if gh is authed) and prints the remaining manual
-steps. It never changes branch protection or rulesets. Manual equivalent:
+The installer handles the repository files and labels it can create safely.
+Complete these project-specific steps after it finishes:
 
-1. Copy `.claude/` into the repo; commit.
-2. `chmod +x .claude/scripts/*.sh`; configure the BUILD/TEST/LINT arrays in `checks.sh`
-   (Xcode projects must set them; SwiftPM auto-detects). Run it once to confirm.
-3. Create the state labels:
+1. Review the installed `.claude/` files and `.swift-version`, if created, then
+   commit the scaffold.
+2. Configure the BUILD/TEST/LINT arrays in `.claude/scripts/checks.sh` (Xcode
+   projects must set them; SwiftPM auto-detects). Run the script once to confirm.
+3. Verify the state labels. If the installer reported that `gh` was unavailable,
+   create them after authenticating:
    `for l in claude-build claude-running claude-ready claude-blocked; do gh label create $l; done`
    State machine: `claude-build` (approved, will trigger) → `claude-running` (claimed
    by a run) → `claude-ready` (PR open + CI green + reviews triaged, awaiting human) or
@@ -79,8 +121,7 @@ steps. It never changes branch protection or rulesets. Manual equivalent:
      silently ignored; the routine escalates cleanly if so, and the no-local-
      build fallback (CI as sole oracle, checks.sh lint-only) always works.
    - Trigger: **GitHub event → Issue: Labeled**, Filter: **Labels is one of `claude-build`**.
-     (Undocumented but confirmed in the Desktop trigger UI.) One trigger covers
-     BOTH flows: GitHub fires a `labeled` event even for labels applied at issue
+     One trigger covers BOTH flows: GitHub fires a `labeled` event even for labels applied at issue
      creation, so plan-to-issue's born-labeled issues fire it, and so does
      labeling an older issue by hand — including swapping `claude-blocked` back
      to `claude-build` after answering an escalation, which makes resume

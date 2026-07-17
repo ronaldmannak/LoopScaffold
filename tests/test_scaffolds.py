@@ -500,6 +500,32 @@ class CloudSetupTests(unittest.TestCase):
 
 
 class ReviewRegressionTests(unittest.TestCase):
+    def test_marketplace_manifests_and_install_guides_match_plugin_sources(self) -> None:
+        claude_marketplace = json.loads(
+            (ROOT / ".claude-plugin/marketplace.json").read_text()
+        )
+        codex_marketplace = json.loads(
+            (ROOT / ".agents/plugins/marketplace.json").read_text()
+        )
+
+        self.assertEqual(claude_marketplace["name"], "loop-scaffold")
+        self.assertEqual(claude_marketplace["plugins"][0]["name"], "claude-loop")
+        claude_source = claude_marketplace["plugins"][0]["source"]
+        self.assertTrue((ROOT / claude_source).is_dir())
+
+        self.assertEqual(codex_marketplace["name"], "loop-scaffold")
+        self.assertEqual(codex_marketplace["plugins"][0]["name"], "codex-loop")
+        codex_source = codex_marketplace["plugins"][0]["source"]
+        self.assertEqual(codex_source["source"], "local")
+        self.assertTrue((ROOT / codex_source["path"]).is_dir())
+
+        claude_guide = (ROOT / "ClaudeCodePlugin/README.md").read_text()
+        codex_guide = (ROOT / "CodexPlugin/README.md").read_text()
+        self.assertIn("claude-loop@loop-scaffold", claude_guide)
+        self.assertIn("/claude-loop:loop-init", claude_guide)
+        self.assertIn("codex-loop@loop-scaffold", codex_guide)
+        self.assertIn("$codex-loop:loop-init", codex_guide)
+
     def test_yaml_validation_is_optional_without_pyyaml(self) -> None:
         script = (ROOT / "scripts/test-scaffolds.sh").read_text()
         self.assertIn("if python3 -c 'import yaml'", script)
@@ -837,7 +863,7 @@ class ReviewRegressionTests(unittest.TestCase):
         readme = (ROOT / "ClaudeCode-script/README.md").read_text()
         fallback = (ROOT / "ClaudeCodePlugin/claude-loop/payload/fallback/claude-build-trigger.yml").read_text()
         plan = (ROOT / "ClaudeCodePlugin/claude-loop/payload/skills/plan-to-issue/SKILL.md").read_text()
-        self.assertIn('native GitHub trigger "Issue: Labeled"', readme)
+        self.assertIn("native **Issue: Labeled** trigger", readme)
         self.assertIn("Issue: Labeled + Labels", fallback)
         self.assertIn("fires the Issue: Labeled routine", plan)
 
