@@ -234,7 +234,6 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertIn("build: SKIPPED", quick.stdout)
                 self.assertIn("test: PASS", quick.stdout)
 
-
 class PolicyHookTests(unittest.TestCase):
     def test_protect_hooks_fail_closed_on_malformed_input(self) -> None:
         for product, hook in PROTECT_HOOKS + GUARD_HOOKS:
@@ -526,6 +525,30 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("codex-loop@loop-scaffold", codex_guide)
         self.assertIn("$codex-loop:loop-init", codex_guide)
 
+    def test_update_guides_document_preservation_and_manual_migrations(self) -> None:
+        root = (ROOT / "README.md").read_text()
+        claude = (ROOT / "ClaudeCodePlugin/README.md").read_text()
+        claude_package = (ROOT / "ClaudeCodePlugin/claude-loop/README.md").read_text()
+        standalone = (ROOT / "ClaudeCode-script/README.md").read_text()
+        codex = (ROOT / "CodexPlugin/README.md").read_text()
+        codex_package = (ROOT / "CodexPlugin/codex-loop/README.md").read_text()
+
+        for guide in (root, claude, claude_package, standalone, codex, codex_package):
+            with self.subTest(guide=guide[:40]):
+                self.assertIn("Update an existing repository", guide)
+
+        self.assertIn("Do not delete `.claude/`", root)
+        self.assertIn("claude plugin update claude-loop@loop-scaffold", claude)
+        self.assertIn("`.claude/scripts/checks.sh` | Preserved", claude)
+        self.assertIn("Anthropic account", claude)
+        self.assertIn("Never overwritten when present", standalone)
+        self.assertIn("claude-converge-trigger.yml` is not removed", standalone)
+
+        self.assertIn("codex plugin marketplace upgrade loop-scaffold", codex)
+        self.assertIn("Managed `AGENTS.md` block | Replaced", codex)
+        self.assertIn("Existing `codex-*.yml` workflows | Never overwritten", codex)
+        self.assertIn("run `/hooks`", codex)
+
     def test_yaml_validation_is_optional_without_pyyaml(self) -> None:
         script = (ROOT / "scripts/test-scaffolds.sh").read_text()
         self.assertIn("if python3 -c 'import yaml'", script)
@@ -783,8 +806,18 @@ class ReviewRegressionTests(unittest.TestCase):
 
         routine = (ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md").read_text()
         standalone = (ROOT / "ClaudeCode-script/README.md").read_text()
-        self.assertIn("20 minutes after pushing", routine)
-        self.assertIn("Stay subscribed for 60 minutes", routine)
+        self.assertIn("external-review timeout", routine)
+        self.assertIn("Apply the external-review protocol", (ROOT / "ClaudeCodePlugin/claude-loop/payload/skills/issue-to-pr/SKILL.md").read_text())
+        self.assertIn(routine, standalone)
+
+    def test_claude_goal_is_compact_and_delegates_to_committed_skill(self) -> None:
+        routine = (ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md").read_text().strip()
+        standalone = (ROOT / "ClaudeCode-script/README.md").read_text()
+        self.assertTrue(routine.startswith("/goal "))
+        self.assertLessEqual(len(routine), 4000)
+        self.assertIn(".claude/skills/issue-to-pr/SKILL.md", routine)
+        self.assertIn("claude-ready", routine)
+        self.assertIn("claude-blocked", routine)
         self.assertIn(routine, standalone)
 
     def test_codex_sweeper_dispatches_durable_review_deadlines(self) -> None:
@@ -810,22 +843,27 @@ class ReviewRegressionTests(unittest.TestCase):
         init_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
         standalone_readme = (ROOT / "ClaudeCode-script/README.md").read_text()
         plugin_payload = ROOT / "ClaudeCodePlugin/claude-loop/payload"
-        self.assertIn("no dispatch comment is required for an empty backlog", routine)
+        implementation = (plugin_payload / "skills/issue-to-pr/SKILL.md").read_text()
+        self.assertIn("Skip\nthe comment for an empty backlog", implementation)
         self.assertIn(routine, standalone_readme)
         self.assertFalse((plugin_payload / "CONVERGE_ROUTINE_PROMPT.md").exists())
         self.assertFalse((plugin_payload / "templates/claude-build-routine-prompt.md").exists())
         self.assertFalse((plugin_payload / "templates/claude-converge-trigger.yml").exists())
         self.assertNotIn("EVENT MODE", (plugin_payload / "skills/pr-iteration/SKILL.md").read_text())
-        self.assertIn("FULL single-routine prompt", init_skill)
+        self.assertIn("complete compact `/goal`", init_skill)
         self.assertNotIn("--with-converger", standalone_readme)
-        self.assertIn("STEP 0 — DEPENDENCIES, CLAIM & IDEMPOTENCY.", standalone_readme)
-        self.assertIn("7. DISPATCH SUGGESTION", standalone_readme)
+        self.assertIn("issue-to-pr/SKILL.md", standalone_readme)
+        self.assertIn("## Gate dependencies and claim ownership", implementation)
+        self.assertIn("## Finish ready", implementation)
+        self.assertIn("unlabeled or parked on a dependency", implementation)
+        self.assertIn("Exclude the current issue", implementation)
+        self.assertIn("every issue labeled `claude-build`, `claude-running`, or `claude-ready`", implementation)
 
     def test_install_guidance_covers_managed_workflow_state(self) -> None:
         claude_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
         codex_skill = (ROOT / "CodexPlugin/codex-loop/skills/loop-init/SKILL.md").read_text()
         installer = (ROOT / "ClaudeCode-script/install.sh").read_text()
-        self.assertIn("Routine B was removed", claude_skill)
+        self.assertIn("B was removed", claude_skill)
         self.assertIn("never overwrite an existing workflow", codex_skill)
         self.assertNotIn("CLAUDE_RUNNER_LOGIN", installer)
         self.assertNotIn("--with-converger", installer)
@@ -835,6 +873,11 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("codex-event-pending", codex_skill)
         self.assertNotIn("OPENAI_API_KEY", codex_skill)
         self.assertNotIn("CODEX_RUNNER_LOGIN", codex_skill)
+        self.assertIn("xcodebuild -workspace", claude_skill)
+        self.assertIn("-showdestinations", claude_skill)
+        self.assertIn("chmod +x .claude/scripts/*.sh", claude_skill)
+        self.assertIn("No `checks.sh` edit is required", claude_skill)
+        self.assertNotIn("MUST be configured", installer)
 
     def test_codex_escalation_blocks_the_linked_issue(self) -> None:
         skill = (ROOT / "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md").read_text()
@@ -869,6 +912,63 @@ class ReviewRegressionTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_install_prints_only_valid_flags_for_multiple_xcode_containers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            run("git", "init", "-q", repo)
+            (repo / "App.xcodeproj").mkdir()
+            (repo / "Tools.xcodeproj").mkdir()
+            binary = repo / "bin"
+            binary.mkdir()
+            gh = binary / "gh"
+            gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+            gh.chmod(0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{binary}:{env['PATH']}"
+
+            result = run(
+                "/bin/bash",
+                ROOT / "ClaudeCode-script/install.sh",
+                repo,
+                cwd=ROOT,
+                env=env,
+            )
+
+            self.assertNotIn("-workspace-or-project", result.stdout)
+            self.assertIn('xcodebuild -project "App.xcodeproj" -list -json', result.stdout)
+            self.assertIn('xcodebuild -project "Tools.xcodeproj" -list -json', result.stdout)
+            self.assertIn('xcodebuild -project "<chosen>.xcodeproj"', result.stdout)
+
+    def test_install_prints_exact_xcode_discovery_and_permission_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            run("git", "init", "-q", repo)
+            (repo / "PicoServer.xcodeproj").mkdir()
+            binary = repo / "bin"
+            binary.mkdir()
+            gh = binary / "gh"
+            gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+            gh.chmod(0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{binary}:{env['PATH']}"
+
+            result = run(
+                "/bin/bash",
+                ROOT / "ClaudeCode-script/install.sh",
+                repo,
+                cwd=ROOT,
+                env=env,
+            )
+
+            self.assertIn("detected Xcode containers", result.stdout)
+            self.assertIn('xcodebuild -project "PicoServer.xcodeproj" -list -json', result.stdout)
+            self.assertIn('-showdestinations', result.stdout)
+            self.assertIn('BUILD=(xcodebuild -project "PicoServer.xcodeproj"', result.stdout)
+            self.assertIn("chmod +x .claude/scripts/*.sh", result.stdout)
+            self.assertIn("bash .claude/scripts/checks.sh --quick", result.stdout)
+
     def test_install_is_idempotent_and_preserves_settings_and_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory) / "repo"
