@@ -831,6 +831,9 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("issue-to-pr/SKILL.md", standalone_readme)
         self.assertIn("## Gate dependencies and claim ownership", implementation)
         self.assertIn("## Finish ready", implementation)
+        self.assertIn("unlabeled or parked on a dependency", implementation)
+        self.assertIn("Exclude the current issue", implementation)
+        self.assertIn("every issue labeled `claude-build`, `claude-running`, or `claude-ready`", implementation)
 
     def test_install_guidance_covers_managed_workflow_state(self) -> None:
         claude_skill = (ROOT / "ClaudeCodePlugin/claude-loop/skills/loop-init/SKILL.md").read_text()
@@ -885,6 +888,34 @@ class ReviewRegressionTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_install_prints_only_valid_flags_for_multiple_xcode_containers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            run("git", "init", "-q", repo)
+            (repo / "App.xcodeproj").mkdir()
+            (repo / "Tools.xcodeproj").mkdir()
+            binary = repo / "bin"
+            binary.mkdir()
+            gh = binary / "gh"
+            gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+            gh.chmod(0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{binary}:{env['PATH']}"
+
+            result = run(
+                "/bin/bash",
+                ROOT / "ClaudeCode-script/install.sh",
+                repo,
+                cwd=ROOT,
+                env=env,
+            )
+
+            self.assertNotIn("-workspace-or-project", result.stdout)
+            self.assertIn('xcodebuild -project "App.xcodeproj" -list -json', result.stdout)
+            self.assertIn('xcodebuild -project "Tools.xcodeproj" -list -json', result.stdout)
+            self.assertIn('xcodebuild -project "<chosen>.xcodeproj"', result.stdout)
+
     def test_install_prints_exact_xcode_discovery_and_permission_commands(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory) / "repo"

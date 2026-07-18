@@ -80,8 +80,12 @@ After the `pr-iteration` completion consistency check succeeds:
 1. Replace `claude-running` with `claude-ready` and verify it is the issue's
    only loop state label.
 2. Comment a one-line issue summary linking the PR.
-3. As the final action, inspect open plan-to-issue issues and comment once on
-   the PR with a next-up suggestion when the backlog is nonempty:
+3. As the final action, inspect open plan-to-issue issues that are either
+   unlabeled or parked on a dependency (`claude-blocked` with a
+   `<!-- claude-dependency-wait #N -->` marker). Exclude the current issue and
+   every issue labeled `claude-build`, `claude-running`, or `claude-ready` so
+   work already queued or owned is never suggested again. Comment once on the
+   PR with a next-up suggestion when that idle backlog is nonempty:
 
 ```text
 When this merges, next up:

@@ -100,22 +100,38 @@ if [[ ${#WORKSPACES[@]} -gt 0 || ${#PROJECTS[@]} -gt 0 ]]; then
     XCODE_FLAG="-project"
     XCODE_CONTAINER="${PROJECTS[0]}"
   else
-    XCODE_FLAG="-workspace-or-project"
-    XCODE_CONTAINER="<choose-one-container>"
     echo "    choose the workspace/project that CI builds before using the commands below"
+    echo "    discover schemes with the valid command for each candidate:"
+    if [[ ${#WORKSPACES[@]} -gt 0 ]]; then
+      for workspace in "${WORKSPACES[@]}"; do
+        echo "      xcodebuild -workspace \"$workspace\" -list -json"
+      done
+    fi
+    if [[ ${#PROJECTS[@]} -gt 0 ]]; then
+      for project in "${PROJECTS[@]}"; do
+        echo "      xcodebuild -project \"$project\" -list -json"
+      done
+    fi
+    echo "    after choosing one container and a shared scheme, use the matching command:"
+    echo "      xcodebuild -workspace \"<chosen>.xcworkspace\" -scheme \"<scheme>\" -showdestinations"
+    echo "      xcodebuild -project \"<chosen>.xcodeproj\" -scheme \"<scheme>\" -showdestinations"
+    echo "    then use either the workspace OR project form shown under PROJECT CHECKS in .claude/scripts/checks.sh"
+    XCODE_FLAG=""
   fi
 
-  echo "    discover schemes:"
-  echo "      xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -list -json"
-  echo "    after choosing a shared scheme, discover valid destinations:"
-  echo "      xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -showdestinations"
-  echo "    then replace the empty BUILD/TEST/LINT/CLEANCMD/EXPECTED_CI_CHECKS line near the top of .claude/scripts/checks.sh with:"
-  echo "      BUILD=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -destination \"<destination>\" build)"
-  echo "      TEST=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -destination \"<destination>\" test)"
-  echo "      LINT=()"
-  echo "      CLEANCMD=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" clean)"
-  echo "      EXPECTED_CI_CHECKS=()"
-  echo "    replace <scheme> and <destination> with values from those commands; do not guess a platform"
+  if [[ -n "$XCODE_FLAG" ]]; then
+    echo "    discover schemes:"
+    echo "      xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -list -json"
+    echo "    after choosing a shared scheme, discover valid destinations:"
+    echo "      xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -showdestinations"
+    echo "    then replace the empty BUILD/TEST/LINT/CLEANCMD/EXPECTED_CI_CHECKS line near the top of .claude/scripts/checks.sh with:"
+    echo "      BUILD=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -destination \"<destination>\" build)"
+    echo "      TEST=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -destination \"<destination>\" test)"
+    echo "      LINT=()"
+    echo "      CLEANCMD=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" clean)"
+    echo "      EXPECTED_CI_CHECKS=()"
+    echo "    replace <scheme> and <destination> with values from those commands; do not guess a platform"
+  fi
 elif [[ -f Package.swift ]]; then
   echo "    detected SwiftPM without an Xcode container — no checks.sh edit is required"
   echo "      BUILD=(swift build)"
