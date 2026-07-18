@@ -1,39 +1,182 @@
 ---
 name: loop-init
-description: Install or update the autonomous issue-to-PR loop scaffolding in the current repository. Use when the user says /loop-init, "set up the loop", "install the loop scaffold", "update the loop scaffold", or asks how to make Claude implement GitHub issues autonomously in this repo. Copies rules, skills, agents, hooks, and templates into .claude/, seeds per-repo config, creates GitHub labels, then walks the user through the two manual steps (routine + environment).
+description: Install or update the autonomous issue-to-PR loop scaffolding in the current repository. Use when the user says /loop-init, "set up the loop", "install the loop scaffold", "update the loop scaffold", or asks how to make Claude implement GitHub issues autonomously in this repo. Copies rules, skills, agents, hooks, and templates into .claude/, configures or explains project checks, creates GitHub labels, then walks the user through the account-level routine and environment setup.
 disable-model-invocation: false
 ---
 
 # Loop init / update
 
-Install (or refresh) the loop scaffolding from this plugin's payload into the current repo, then guide the user through the steps that cannot be automated. Idempotent: safe to rerun for updates.
+Install or refresh the loop scaffold, then guide the user through the account
+and repository steps that cannot be automated. Keep updates idempotent.
 
-## 1. Preconditions
-- Confirm cwd is a git repo root. If not, stop and say so.
-- `PAYLOAD="${CLAUDE_PLUGIN_ROOT}/payload"` — all copies come from there.
+## 1. Preflight without changing the repository
 
-## 2. Copy runtime files (refresh on update)
-- Before copying any repo files, copy the existing `.claude/settings.json` (or `{}` when absent) to a temporary file and run `python3 "$PAYLOAD/scripts/merge-settings.py" <temporary-file> "$PAYLOAD/settings.json"`. Only continue after this preflight succeeds. After copying the other runtime files, move the merged temporary file into `.claude/settings.json`. This preserves unrelated settings and hooks, replaces only prior loop-owned hook commands, and leaves the repo untouched if existing JSON is invalid. Never overwrite the whole settings file from the template.
-- `mkdir -p .claude && cp -r "$PAYLOAD"/rules "$PAYLOAD"/skills "$PAYLOAD"/agents "$PAYLOAD"/templates "$PAYLOAD"/fallback .claude/`
-- Scripts: copy `"$PAYLOAD"/scripts/*` EXCEPT checks.sh into `.claude/scripts/`. Copy checks.sh ONLY if `.claude/scripts/checks.sh` does not exist (it holds per-repo config; never overwrite). `chmod +x .claude/scripts/*.sh`
-- On update, remove the obsolete scaffold-owned `.claude/templates/claude-build-routine-prompt.md` and `.claude/templates/claude-converge-trigger.yml` if present. If `.github/workflows/claude-converge-trigger.yml` exists, explain that Routine B was removed and ask before deleting that user-configured workflow. Tell the user to restore Routine A to the full `ROUTINE_PROMPT.md`; never silently delete the workflow or change the routine stored in their Anthropic account.
+- Confirm the current directory is a Git repository root.
+- Set `PAYLOAD="${CLAUDE_PLUGIN_ROOT}/payload"`.
+- Copy the existing `.claude/settings.json`, or `{}` when absent, to a
+  temporary file. Run
+  `python3 "$PAYLOAD/scripts/merge-settings.py" <temporary> "$PAYLOAD/settings.json"`.
+  Stop with the repository untouched if it fails. Retain the merged temporary
+  file; do not activate the new hooks yet.
+- Record whether `.claude/scripts/checks.sh` already exists. It is project
+  configuration and must never be overwritten on update.
 
-## 3. Seed per-repo config (create-only, never overwrite)
-- Swift repo (Package.swift or *.xcodeproj present) and no `.swift-version`: write `6.3.3` to `.swift-version`, tell the user to adjust if needed.
-- If checks.sh was just created and an .xcodeproj exists: tell the user they MUST configure the BUILD/TEST arrays before the loop is trustworthy.
-- Detect support for CI context listing with `grep -q -- '--list-ci-checks)' .claude/scripts/checks.sh`. Older preserved scripts use the safe single-provider fallback. If the repository uses more than one CI provider, require the user to port the current checks.sh interface and configure exact context names in `EXPECTED_CI_CHECKS` (use the names shown by `gh pr checks`) before trusting convergence.
-- Run `bash .claude/scripts/checks.sh --quick` and report the result honestly (a failure here is a setup task for the user, not something to fix by editing their project).
+## 2. Copy the runtime files
 
-## 4. GitHub side (needs gh auth; skip with a note if unavailable)
-- Labels, idempotent: inspect each of `claude-build`, `claude-running`, `claude-ready`, and `claude-blocked`; create only missing labels. Report authorization/repository failures distinctly—never treat every failed create as proof that a label exists.
-- Ask the user (do not assume) whether to copy `.claude/templates/ci-github-actions.yml` to `.github/workflows/ci.yml` — only for repos using GitHub Actions CI (Xcode Cloud repos skip it). The template's editable default is `swift:6.3`; tell the developer to change the YAML when the project uses another toolchain.
-- Inspect existing branch/ruleset protection without mutating it. If the repo has no merge gate, remind the user to configure PR + passing-check requirements manually; checks appear in the dropdown only after reporting once.
+- Create `.claude/` and copy `rules`, `skills`, `agents`, `templates`, and
+  `fallback` from the payload.
+- Copy every payload script except `checks.sh`. Copy `checks.sh` only when it
+  did not already exist, and remember that it is newly created.
+- Run `chmod +x .claude/scripts/*.sh`, verify each script is executable with
+  `test -x`, and report the exact command and result. This happens before the
+  new guard is activated; after installation, policy-file permission changes
+  are intentionally human-only.
+- Remove obsolete scaffold-owned
+  `.claude/templates/claude-build-routine-prompt.md` and
+  `.claude/templates/claude-converge-trigger.yml`. If
+  `.github/workflows/claude-converge-trigger.yml` exists, explain that Routine
+  B was removed and ask before deleting that user-controlled workflow. Never
+  alter the account routine silently.
 
-## 5. Commit
-Show `git status --short -- .claude .swift-version .github/workflows/ci.yml`. Stage only paths the user reviews, commit as "Claude loop scaffolding (plugin v<version from plugin.json>)", and ask before pushing.
+## 3. Configure and explain checks
 
-## 6. The manual steps — print this walkthrough VERBATIM as the final message
-Print the routine name (`Implement claude-build issues`), trigger (**Issue: Labeled**, filter **Labels is one of `claude-build`**), repo, and the FULL single-routine prompt from `"$PAYLOAD"/ROUTINE_PROMPT.md` in one copyable block. The prompt opens with a /goal line: if the platform supports goal evaluation it enforces the terminal state mechanically, and otherwise reads as a plain goal statement; tell the user to check the first transcript for goal registration. Then print the environment instructions: custom allowed domains (`download.swift.org`, `archive.ubuntu.com`, `security.ubuntu.com` for Swift repos) and the setup script from `.claude/templates/cloud-setup-swift.sh` in a copyable block. Tell the user to enable Codex code review and automatic reviews for the repository because the subscribed routine treats a submitted review or Codex-bot 👍 as the external-review gate and blocks for human intervention after the 20/60-minute fallback expires. Then print the OPTIONAL overnight batch section: labeling multiple issues runs them in parallel (one session/branch/PR each); use "Depends-on: #N" in an issue body to serialize dependent work; and for unattended nights, offer the queue-sweeper as a second routine — SCHEDULED trigger (e.g. hourly), prompt from `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md` in a copyable block. The implementer posts the next-up suggestion after convergence, and the sweeper handles dependency auto-resume within the hour. Close with: "Routine config lives in your Anthropic account — re-paste prompts whenever /loop-init reports they changed. Smoke-test with one trivial labeled issue and read the whole transcript."
+Inspect the project before running checks. Always report the detected project
+type, whether an edit is needed, and the exact commands that will run.
 
-## Update mode notes
-When `.claude/rules` already existed before this run, this is an update: after copying, `git diff --stat .claude` and summarize what changed; explicitly tell the user whether ROUTINE_PROMPT.md or cloud-setup-swift.sh changed, because prompt or setup changes require manual re-pasting.
+### SwiftPM without an Xcode project or workspace
+
+No `checks.sh` edit is required. Its built-in detection uses:
+
+```bash
+BUILD=(swift build)
+TEST=(swift test)
+CLEANCMD=(swift package clean)
+```
+
+Report those commands and run `bash .claude/scripts/checks.sh --quick`.
+
+### npm
+
+Inspect `package.json` and list which of `build`, `test`, and `lint` exist. No
+edit is required when at least one exists; `checks.sh` runs the corresponding
+`npm run` commands and sets `CI=true` for `npm test`. If none exists, ask for
+the project's real commands and show exactly how to put them into the
+`BUILD`, `TEST`, and `LINT` arrays.
+
+### Xcode project or workspace
+
+Xcode takes precedence over a root `Package.swift`. Do not merely say that the
+arrays "MUST be configured."
+
+1. Prefer the intended `.xcworkspace` when the repository has one; otherwise
+   use the intended `.xcodeproj`. If more than one plausible container exists,
+   list them and ask the user which one drives CI.
+2. Run the applicable list command and show the discovered schemes:
+
+   ```bash
+   xcodebuild -workspace "<workspace>.xcworkspace" -list -json
+   xcodebuild -project "<project>.xcodeproj" -list -json
+   ```
+
+3. For the selected scheme, run the applicable `-showdestinations` command.
+   Ask the user to choose when multiple platforms or destinations are
+   plausible. Never invent an iOS simulator or assume macOS for an iOS app.
+4. Produce a copyable replacement for the configuration line near the top of
+   `.claude/scripts/checks.sh`, using the detected container, scheme, and
+   selected destination. For example:
+
+   ```bash
+   BUILD=(xcodebuild -workspace "App.xcworkspace" -scheme "App" -destination "platform=macOS" build)
+   TEST=(xcodebuild -workspace "App.xcworkspace" -scheme "App" -destination "platform=macOS" test)
+   LINT=()
+   CLEANCMD=(xcodebuild -workspace "App.xcworkspace" -scheme "App" clean)
+   EXPECTED_CI_CHECKS=()
+   ```
+
+5. When `checks.sh` is newly created and the container, scheme, and destination
+   are unambiguous, show the proposed lines and ask permission to write them
+   before activating the new hooks. Otherwise leave the file unchanged and
+   print the exact snippet with each unresolved choice called out.
+6. Run `bash .claude/scripts/checks.sh --quick` only after configuration. A
+   failure or unresolved choice leaves setup incomplete; say so plainly.
+
+### Unknown project type
+
+Ask for the real build, test, lint, and clean commands. Show their exact Bash
+array form instead of giving a generic instruction to edit the file.
+
+For every project type, explain that `EXPECTED_CI_CHECKS` may remain empty for
+one provider during initial setup. Repositories requiring multiple CI providers
+must add every exact context returned by `gh pr checks` and verify with:
+
+```bash
+bash .claude/scripts/checks.sh --list-ci-checks
+```
+
+## 4. Activate hooks and seed the toolchain
+
+- Move the preflighted settings file into `.claude/settings.json`. It preserves
+  unrelated settings and hooks and replaces only prior loop-owned commands.
+- For a Swift repository without `.swift-version`, write `6.3.3` and tell the
+  user to change it when the project uses another toolchain.
+
+## 5. Configure GitHub without changing protection
+
+- When `gh` is authenticated, inspect the labels `claude-build`,
+  `claude-running`, `claude-ready`, and `claude-blocked`; create only missing
+  labels. Distinguish inspection, authorization, and creation failures.
+- Ask whether to copy `.claude/templates/ci-github-actions.yml` to
+  `.github/workflows/ci.yml`, and do so only for repositories choosing GitHub
+  Actions CI. Never overwrite an existing workflow. Its editable default is
+  `swift:6.3`.
+- Inspect branch or ruleset protection without mutating it. Remind the user to
+  configure PR and passing-check merge gates manually when absent.
+
+## 6. Hand policy files to the human
+
+Show:
+
+```bash
+git status --short -- .claude .swift-version .github/workflows/ci.yml
+git diff -- .claude .swift-version .github/workflows/ci.yml
+```
+
+Do not run `git add` or `git commit` for these scaffold paths. The installed
+guard intentionally reserves policy-file staging for a human and would block
+that command. After the user reviews the diff, print the exact terminal command
+for the paths that actually exist, followed by the suggested message
+`Claude loop scaffolding (plugin v<version>)`. Ask before any push.
+
+## 7. Print the remaining setup
+
+End with one self-contained walkthrough containing:
+
+1. **Checks summary:** detected project type, exact active commands, whether
+   `checks.sh --quick` passed, and any unresolved edit. State that executable
+   bits were set with `chmod +x .claude/scripts/*.sh`; include that command for
+   manual recovery.
+2. **Implementation routine:** name `Implement claude-build issues`, repository,
+   trigger **Issue: Labeled**, filter **Labels is one of `claude-build`**, and
+   the complete compact `/goal` from `"$PAYLOAD"/ROUTINE_PROMPT.md` in one
+   copyable block. Explain that the detailed procedure lives in the committed
+   `.claude/skills/issue-to-pr/SKILL.md`, while the compact condition remains
+   below Claude's 4,000-character goal limit. Tell the user to confirm the
+   first transcript shows goal registration.
+3. **Environment:** for Swift repositories, print the allowed domains
+   `download.swift.org`, `archive.ubuntu.com`, and `security.ubuntu.com`, plus
+   `.claude/templates/cloud-setup-swift.sh` in a copyable block.
+4. **Review gate:** enable Codex code review and automatic reviews. The routine
+   uses the 20-minute request and 60-minute human-intervention fallback.
+5. **Optional overnight sweep:** explain parallel labeling and `Depends-on:
+   #N`; offer a second scheduled routine using the complete
+   `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md`.
+6. **Smoke test:** routine configuration lives in the Anthropic account. Paste
+   updated prompts whenever `/loop-init` reports a change, then test one trivial
+   labeled issue and read the full transcript.
+
+## Update notes
+
+When `.claude/rules` existed before the run, show `git diff --stat .claude` and
+summarize changes. Explicitly report changes to `ROUTINE_PROMPT.md`,
+`issue-to-pr/SKILL.md`, or `cloud-setup-swift.sh`, because account prompts or
+environment setup may require manual updates.

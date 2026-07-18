@@ -11,13 +11,29 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 # ---------------------------------------------------------------
-# CONFIGURE PER PROJECT (preferred over auto-detection). Examples:
-#   BUILD=(xcodebuild -scheme Pico -destination 'platform=macOS' build)
-#   TEST=(xcodebuild -scheme Pico -destination 'platform=macOS' test)
+# PROJECT CHECKS
+#
+# No edit is needed for these auto-detected cases:
+# - Package.swift without an Xcode container: swift build, swift test, and
+#   swift package clean.
+# - package.json: declared build, test, and lint scripts (at least one required).
+#
+# Xcode containers are not guessed because scheme and destination are
+# project-specific. Discover them first:
+#   xcodebuild -workspace "App.xcworkspace" -list -json
+#   xcodebuild -workspace "App.xcworkspace" -scheme "App" -showdestinations
+# Use -project "App.xcodeproj" instead when the repo does not use a workspace.
+# Then replace the empty arrays below, for example:
+#   BUILD=(xcodebuild -workspace "App.xcworkspace" -scheme "App" -destination "platform=macOS" build)
+#   TEST=(xcodebuild -workspace "App.xcworkspace" -scheme "App" -destination "platform=macOS" test)
 #   LINT=(swiftlint --strict)
+#   CLEANCMD=(xcodebuild -workspace "App.xcworkspace" -scheme "App" clean)
+#
+# EXPECTED_CI_CHECKS may stay empty with one CI provider. When multiple
+# providers are required, add every exact name returned by `gh pr checks`:
 #   EXPECTED_CI_CHECKS=("CI / verify" "Xcode Cloud")
-# Use exact names from `gh pr checks`. Configure every provider when checks
-# can register at different times; the PR loop waits for all names listed.
+# Verify the list with: bash .claude/scripts/checks.sh --list-ci-checks
+# If execution is denied: chmod +x .claude/scripts/*.sh
 # ---------------------------------------------------------------
 BUILD=(); TEST=(); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()
 
@@ -42,7 +58,8 @@ STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
 
 if [[ ${#BUILD[@]} -eq 0 && ${#TEST[@]} -eq 0 && ${#LINT[@]} -eq 0 ]]; then
   if compgen -G "*.xcodeproj" >/dev/null || compgen -G "*.xcworkspace" >/dev/null; then
-    echo "checks.sh: Xcode project detected — configure BUILD/TEST arrays in this script." >&2
+    echo "checks.sh: Xcode project detected — BUILD/TEST are intentionally not guessed." >&2
+    echo "checks.sh: use xcodebuild -list -json and -showdestinations, then copy the arrays shown under PROJECT CHECKS at the top of this file." >&2
     exit 1
   elif [[ -f Package.swift ]]; then
     BUILD=(swift build); TEST=(swift test); CLEANCMD=(swift package clean)

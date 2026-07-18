@@ -59,7 +59,7 @@ trap - EXIT
 echo "    merged loop hooks into .claude/settings.json (unrelated settings preserved)"
 if [[ ! -f .claude/scripts/checks.sh ]]; then
   cp "$SRC/.claude/scripts/checks.sh" .claude/scripts/checks.sh
-  echo "    installed checks.sh — CONFIGURE its BUILD/TEST arrays if this is an Xcode project"
+  echo "    installed checks.sh"
 else
   echo "    kept existing checks.sh (per-repo config preserved)"
 fi
@@ -73,6 +73,82 @@ if [[ -f .github/workflows/claude-converge-trigger.yml ]]; then
   echo "    MIGRATION: Routine B was removed; review and delete .github/workflows/claude-converge-trigger.yml, then restore Routine A from README.md" >&2
 fi
 chmod +x .claude/scripts/*.sh
+echo "    set executable bits: chmod +x .claude/scripts/*.sh"
+
+echo "==> checks.sh configuration"
+shopt -s nullglob
+WORKSPACES=(*.xcworkspace)
+PROJECTS=(*.xcodeproj)
+shopt -u nullglob
+if [[ ${#WORKSPACES[@]} -gt 0 || ${#PROJECTS[@]} -gt 0 ]]; then
+  echo "    detected Xcode containers (Xcode takes precedence over Package.swift)"
+  if [[ ${#WORKSPACES[@]} -gt 0 ]]; then
+    for workspace in "${WORKSPACES[@]}"; do
+      echo "      workspace: $workspace"
+    done
+  fi
+  if [[ ${#PROJECTS[@]} -gt 0 ]]; then
+    for project in "${PROJECTS[@]}"; do
+      echo "      project: $project"
+    done
+  fi
+
+  if [[ ${#WORKSPACES[@]} -eq 1 ]]; then
+    XCODE_FLAG="-workspace"
+    XCODE_CONTAINER="${WORKSPACES[0]}"
+  elif [[ ${#WORKSPACES[@]} -eq 0 && ${#PROJECTS[@]} -eq 1 ]]; then
+    XCODE_FLAG="-project"
+    XCODE_CONTAINER="${PROJECTS[0]}"
+  else
+    XCODE_FLAG="-workspace-or-project"
+    XCODE_CONTAINER="<choose-one-container>"
+    echo "    choose the workspace/project that CI builds before using the commands below"
+  fi
+
+  echo "    discover schemes:"
+  echo "      xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -list -json"
+  echo "    after choosing a shared scheme, discover valid destinations:"
+  echo "      xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -showdestinations"
+  echo "    then replace the empty BUILD/TEST/LINT/CLEANCMD/EXPECTED_CI_CHECKS line near the top of .claude/scripts/checks.sh with:"
+  echo "      BUILD=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -destination \"<destination>\" build)"
+  echo "      TEST=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" -destination \"<destination>\" test)"
+  echo "      LINT=()"
+  echo "      CLEANCMD=(xcodebuild $XCODE_FLAG \"$XCODE_CONTAINER\" -scheme \"<scheme>\" clean)"
+  echo "      EXPECTED_CI_CHECKS=()"
+  echo "    replace <scheme> and <destination> with values from those commands; do not guess a platform"
+elif [[ -f Package.swift ]]; then
+  echo "    detected SwiftPM without an Xcode container — no checks.sh edit is required"
+  echo "      BUILD=(swift build)"
+  echo "      TEST=(swift test)"
+  echo "      CLEANCMD=(swift package clean)"
+elif [[ -f package.json ]]; then
+  echo "    detected package.json — checks.sh auto-runs declared build, test, and lint scripts"
+  if command -v node >/dev/null 2>&1; then
+    NPM_SCRIPTS=$(node -e 'const p=JSON.parse(require("fs").readFileSync("package.json", "utf8")); for (const n of ["build", "test", "lint"]) if (p.scripts && Object.prototype.hasOwnProperty.call(p.scripts, n)) console.log(n + ": " + p.scripts[n])' 2>/dev/null || true)
+    if [[ -n "$NPM_SCRIPTS" ]]; then
+      while IFS= read -r npm_script; do
+        echo "      $npm_script"
+      done <<< "$NPM_SCRIPTS"
+      echo "    no checks.sh edit is required"
+    else
+      echo "    no build, test, or lint script was found; set at least one exact command, for example:"
+      echo "      BUILD=(npm run <script>)"
+      echo "      TEST=(env CI=true npm run <script>)"
+      echo "      LINT=(npm run <script>)"
+    fi
+  else
+    echo "    node is unavailable, so inspect package.json and verify at least one of build/test/lint exists"
+  fi
+else
+  echo "    project type was not recognized; replace the empty array line with the real commands, for example:"
+  echo "      BUILD=(<build-command> <arguments>)"
+  echo "      TEST=(<test-command> <arguments>)"
+  echo "      LINT=(<lint-command> <arguments>)"
+  echo "      CLEANCMD=(<clean-command> <arguments>)"
+  echo "      EXPECTED_CI_CHECKS=()"
+fi
+echo "    add every required CI context to EXPECTED_CI_CHECKS only when more than one provider must report"
+echo "    verify configured contexts: bash .claude/scripts/checks.sh --list-ci-checks"
 
 # Seed .swift-version for Swift repos (read at RUN TIME by the cloud
 # environment's setup script — bumping this file in a commit changes what
@@ -124,36 +200,46 @@ echo "==> Sanity check"
 if .claude/scripts/checks.sh --quick >/dev/null 2>&1; then
   echo "    checks.sh --quick: PASS"
 else
-  echo "    checks.sh --quick: FAILED or unconfigured — fix before relying on the loop"
+  echo "    checks.sh --quick: FAILED or unconfigured"
+  echo "    use the exact project-specific commands printed above, then rerun:"
+  echo "      bash .claude/scripts/checks.sh --quick"
 fi
 
 cat << 'EOD'
 
 ==> Done. Remaining MANUAL steps (cannot be scripted):
-  1. Review: git status --short -- .claude .swift-version .github/workflows/ci.yml
+  1. Checks: review the project-specific configuration printed above. The
+     installer already ran `chmod +x .claude/scripts/*.sh`; rerun that exact
+     command if executable bits are ever lost. Setup is incomplete until:
+       bash .claude/scripts/checks.sh --quick
+     passes.
+  2. Review: git status --short -- .claude .swift-version .github/workflows/ci.yml
      Stage only the paths shown, then commit "Claude loop scaffold". Push after review.
-  2. Routine (UI-only: config lives in your Anthropic account, no API):
+  3. Routine (UI-only: config lives in your Anthropic account, no API):
      claude.ai/code/routines or Desktop → New → paste the routine prompt
      from README.md → trigger: Issue: Labeled, Labels is one of:
      claude-build → repo: this one.
+     The compact /goal stays below the 4,000-character limit; the full
+     procedure lives in committed .claude/skills/issue-to-pr/SKILL.md.
      (Re-paste the prompt after every scaffold update!)
-  3. CI choice (see README table):
+  4. CI choice (see README table):
      - Actions: done if you passed --with-actions-ci
      - Xcode Cloud: App Store Connect → workflow start condition =
        "Pull Request Changes" targeting main
      - Multiple CI providers: put every exact required context name in
        EXPECTED_CI_CHECKS inside .claude/scripts/checks.sh
-  4. Inspect existing branch/ruleset protection without changing it. If this
+  5. Inspect existing branch/ruleset protection without changing it. If this
      repo has no merge gate, configure one manually in GitHub. Required checks
      appear only after reporting once, so a throwaway PR may be needed.
-  5. Enable Codex code review and automatic reviews for this repository. The
+  6. Enable Codex code review and automatic reviews for this repository. The
      routine requests @codex review after 20 minutes and blocks for human
      intervention if neither a Codex-bot thumbs-up nor a submitted review
      arrives within 60 minutes of that request.
-  6. Swift repos: paste .claude/templates/cloud-setup-swift.sh into the
+  7. Swift repos: paste .claude/templates/cloud-setup-swift.sh into the
      routine environment's setup script (once). Toolchain version updates
      afterwards happen by editing .swift-version in the repo — NOT the
      pasted script. Verify on the first run that the transcript shows
      "Required Swift >= X (from ./.swift-version)".
-  7. Smoke test: one trivial labeled issue, read the whole transcript.
+  8. Smoke test: one trivial labeled issue, read the whole transcript and
+     confirm that the /goal condition registers successfully.
 EOD

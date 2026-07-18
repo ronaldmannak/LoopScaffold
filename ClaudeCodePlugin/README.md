@@ -56,9 +56,19 @@ Run the plugin's namespaced skill in that session:
 /claude-loop:loop-init
 ```
 
-Review the files it proposes, configure the project's checks, and follow the
-printed routine and cloud-environment steps. The initializer does not alter
-branch protection or repository rulesets.
+Review the files it proposes and follow the printed routine and
+cloud-environment steps. The initializer detects Xcode, SwiftPM, and npm
+projects. It either reports that `checks.sh` needs no edit or shows the exact
+scheme/destination discovery commands and a copyable configuration; when a new
+Xcode configuration is unambiguous, it asks before writing it. It also runs and
+reports `chmod +x .claude/scripts/*.sh`. The initializer does not alter branch
+protection or repository rulesets.
+
+Installing the plugin and running the initializer do not create the routine in
+your Anthropic account. `/claude-loop:loop-init` prints the compact `/goal`, the
+**Issue: Labeled** trigger, and the environment setup for you to enter in the
+Claude routine UI. The longer implementation procedure is installed in
+`.claude/skills/issue-to-pr/SKILL.md` and is read by each cloud run.
 
 Run `/claude-loop:loop-init` again after a plugin update. It refreshes managed
 files while preserving the project's customized `.claude/scripts/checks.sh`.

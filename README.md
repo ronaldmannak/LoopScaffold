@@ -31,6 +31,11 @@ scripts, labels, and workflow templates.
 The standalone distribution skips the first layer: its `install.sh` writes the
 Claude repository scaffold directly.
 
+For either Claude distribution, repository installation does not create the
+Anthropic account routine. The initializer or standalone installer prints the
+compact `/goal`, trigger, and environment setup for you to enter in Claude's
+routine UI. The committed `issue-to-pr` skill contains the longer procedure.
+
 All three options preserve project-owned settings when they install their
 hooks. They do not merge pull requests or change branch protection or repository
 rulesets. Configure CI and merge gates for each target repository before relying
@@ -46,8 +51,8 @@ on an unattended loop.
 
 Both Claude distributions intentionally share the same `.claude` runtime files.
 The test suite fails if those copies drift. Account-level routine prompt files
-remain plugin-only; the standalone distribution presents its routine prompt in
-its README.
+remain plugin-only; the standalone distribution presents the same compact
+routine prompt in its README.
 
 ## Validate and build
 
