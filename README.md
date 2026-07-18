@@ -41,6 +41,32 @@ hooks. They do not merge pull requests or change branch protection or repository
 rulesets. Configure CI and merge gates for each target repository before relying
 on an unattended loop.
 
+## Update an existing repository
+
+Do not delete `.claude/`, `.codex/`, `.agents/`, or the managed `AGENTS.md`
+block before updating. First commit or stash unrelated work, update the same
+distribution you originally installed, and rerun its initializer:
+
+| Distribution | Refresh the installer | Update the repository |
+| --- | --- | --- |
+| Claude Code plugin | `claude plugin update claude-loop@loop-scaffold --scope user`, then restart Claude Code | Run `/claude-loop:loop-init` from the repository root |
+| Codex plugin | `codex plugin marketplace upgrade loop-scaffold`, then `codex plugin add codex-loop@loop-scaffold` and restart Codex | Run `$codex-loop:loop-init` from the repository root |
+| Standalone Claude script | Update or replace your LoopScaffold checkout | Rerun `ClaudeCode-script/install.sh /absolute/path/to/repository` with the same CI choice |
+
+Rerunning is the supported update path, but it deliberately does not replace
+project-owned configuration. In particular, an existing `checks.sh` is kept,
+so adopt new check-script features manually when you need them. Loop-owned
+rules, skills, agents, and non-config scripts are refreshed and may replace
+local edits at those paths. Review the resulting diff before committing.
+
+Claude account routines, Claude cloud-environment settings, existing CI
+workflows, branch protection, and repository rulesets are not silently updated.
+Follow the initializer's migration notes for those items. See the
+[Claude plugin update guide](ClaudeCodePlugin/README.md#update-an-existing-repository),
+[standalone update guide](ClaudeCode-script/README.md#update-an-existing-repository),
+or [Codex plugin update guide](CodexPlugin/README.md#update-an-existing-repository)
+for the exact preservation rules.
+
 ## Repository layout
 
 - `ClaudeCodePlugin/claude-loop/` is the reviewable Claude Code plugin source.

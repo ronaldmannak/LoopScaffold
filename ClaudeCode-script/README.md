@@ -51,8 +51,50 @@ prints the exact checks that apply, reports the executable-bit command, and
 shows a copyable Xcode configuration when scheme or destination choices remain.
 Review its output and the resulting repository diff before committing.
 
-Run the same command again to update the scaffold. The installer is idempotent
-and continues to preserve the project-owned checks configuration.
+## Update an existing repository
+
+Update in place; do not remove `.claude/` first. Obtain the current
+LoopScaffold checkout, commit or stash unrelated target-repository changes, and
+rerun the same install command:
+
+```bash
+cd ClaudeCode-script
+./install.sh /absolute/path/to/your/repository
+```
+
+If the repository originally used the included Actions template, keep the same
+choice:
+
+```bash
+./install.sh /absolute/path/to/your/repository --with-actions-ci
+```
+
+The installer applies these preservation rules:
+
+| Area | Update behavior |
+| --- | --- |
+| `.claude/scripts/checks.sh` | Never overwritten when present. This protects project-specific commands, but also means newer template features must be ported manually when you want them. |
+| `.claude/settings.json` | Merged. Current loop-owned hooks replace older loop-owned hooks; unrelated settings and hooks remain. Invalid JSON stops the install before repository files change. |
+| Rules, skills, agents, templates, fallback files, and other scripts | Current files are copied over managed paths. Local edits there may be overwritten. Extra stale files are not generally removed. |
+| `.swift-version` | Created only when missing and preserved thereafter. |
+| `.github/workflows/ci.yml` | Created only with `--with-actions-ci` and only when absent; never overwritten. |
+| Labels | Only missing loop labels are created when `gh` is authenticated. |
+| Branch protection and repository rulesets | Never changed. |
+
+Two old Routine B templates are removed automatically because they were owned
+by the scaffold. An existing
+`.github/workflows/claude-converge-trigger.yml` is not removed; the installer
+prints a migration warning so you can review and delete it deliberately. The
+Anthropic account routine is also outside the repository and is never updated
+by this script, so re-paste the current prompt after each scaffold update. If
+the cloud setup source changed, update that account-level setup script too.
+
+After the update, inspect the diff before staging:
+
+```bash
+git status --short -- .claude .swift-version .github/workflows/ci.yml
+git diff -- .claude .swift-version .github/workflows/ci.yml
+```
 
 ## Finish setup
 

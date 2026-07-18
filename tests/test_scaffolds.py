@@ -525,6 +525,30 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("codex-loop@loop-scaffold", codex_guide)
         self.assertIn("$codex-loop:loop-init", codex_guide)
 
+    def test_update_guides_document_preservation_and_manual_migrations(self) -> None:
+        root = (ROOT / "README.md").read_text()
+        claude = (ROOT / "ClaudeCodePlugin/README.md").read_text()
+        claude_package = (ROOT / "ClaudeCodePlugin/claude-loop/README.md").read_text()
+        standalone = (ROOT / "ClaudeCode-script/README.md").read_text()
+        codex = (ROOT / "CodexPlugin/README.md").read_text()
+        codex_package = (ROOT / "CodexPlugin/codex-loop/README.md").read_text()
+
+        for guide in (root, claude, claude_package, standalone, codex, codex_package):
+            with self.subTest(guide=guide[:40]):
+                self.assertIn("Update an existing repository", guide)
+
+        self.assertIn("Do not delete `.claude/`", root)
+        self.assertIn("claude plugin update claude-loop@loop-scaffold", claude)
+        self.assertIn("`.claude/scripts/checks.sh` | Preserved", claude)
+        self.assertIn("Anthropic account", claude)
+        self.assertIn("Never overwritten when present", standalone)
+        self.assertIn("claude-converge-trigger.yml` is not removed", standalone)
+
+        self.assertIn("codex plugin marketplace upgrade loop-scaffold", codex)
+        self.assertIn("Managed `AGENTS.md` block | Replaced", codex)
+        self.assertIn("Existing `codex-*.yml` workflows | Never overwritten", codex)
+        self.assertIn("run `/hooks`", codex)
+
     def test_yaml_validation_is_optional_without_pyyaml(self) -> None:
         script = (ROOT / "scripts/test-scaffolds.sh").read_text()
         self.assertIn("if python3 -c 'import yaml'", script)

@@ -47,6 +47,32 @@ Then start a new Codex session at the root of a target repository and invoke
 **`$codex-loop:loop-init`**. Review its proposed changes and follow the printed
 steps. Run the initializer again after plugin updates.
 
+## Update an existing repository
+
+Refresh the marketplace, reinstall the plugin, restart Codex, and rerun the
+initializer:
+
+```bash
+codex plugin marketplace upgrade loop-scaffold
+codex plugin add codex-loop@loop-scaffold
+```
+
+```text
+$codex-loop:loop-init
+```
+
+Do not delete `.codex/`, `.agents/`, or the managed `AGENTS.md` block first.
+The updater preserves `checks.sh`, merges hooks without removing unrelated
+entries, replaces only the marker-managed `AGENTS.md` block, and keeps an
+existing `.swift-version`. Loop-managed skills and other scripts are refreshed,
+so local edits to those paths may be overwritten.
+
+Existing `codex-*.yml` workflows are never overwritten because they contain
+repository-specific CI names and task prompts. The initializer shows their
+differences for you to merge manually. Run `/hooks` and re-trust the hook hash
+after every scaffold update. Project CI, branch protection, and repository
+rulesets remain developer-managed.
+
 Labels codex-* and branches codex/* — designed to coexist with
 claude-loop in the same repository for side-by-side agent comparison.
 

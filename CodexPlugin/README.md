@@ -60,9 +60,44 @@ confirm that CI runs for pull requests and reports the exact checks the loop
 watches. The initializer does not create project CI, alter branch protection,
 or change repository rulesets.
 
-Run `$codex-loop:loop-init` again after updating the plugin. It refreshes managed
-files while preserving local workflow decisions and the project's customized
-`.codex/scripts/checks.sh`.
+## Update an existing repository
+
+Update in place; do not delete `.codex/`, `.agents/`, or the managed block in
+`AGENTS.md`. Commit or stash unrelated work first, then refresh and reinstall
+the marketplace plugin:
+
+```bash
+codex plugin marketplace upgrade loop-scaffold
+codex plugin add codex-loop@loop-scaffold
+```
+
+Restart Codex, open the target repository, and rerun:
+
+```text
+$codex-loop:loop-init
+```
+
+The initializer applies these preservation rules:
+
+| Area | Update behavior |
+| --- | --- |
+| `.codex/scripts/checks.sh` | Preserved when present. Older scripts continue using the safe single-provider behavior; manually port the current `--list-ci-checks` interface before configuring multiple CI providers. |
+| `.codex/hooks.json` | Merged. Current loop-owned hooks replace older loop-owned hooks; unrelated hook events and entries remain. |
+| Managed `AGENTS.md` block | Replaced between the `codex-loop` markers. Content outside the markers remains. Unmatched or duplicated markers stop the update instead of guessing. |
+| `.agents/skills/` and non-config `.codex/scripts/` files | Refreshed from the plugin. Local edits at loop-managed paths may be overwritten. |
+| Existing `codex-*.yml` workflows | Never overwritten. The initializer shows template differences; merge relevant scaffold changes manually while preserving CI names and local task prompts. |
+| `.swift-version` | Created only when missing, then preserved. |
+| Labels | Only missing loop and event-ownership labels are created. |
+| Project CI, branch protection, and repository rulesets | Never created or changed. CI remains a developer-configured prerequisite. |
+
+After any hook update, run `/hooks` and trust the new `.codex/hooks.json` hash.
+Then review the repository diff and manually merge workflow changes before the
+next smoke test:
+
+```bash
+git status --short -- AGENTS.md .agents .codex .github/workflows .swift-version
+git diff -- AGENTS.md .agents .codex .github/workflows .swift-version
+```
 
 ## Continue with the packaged guide
 
