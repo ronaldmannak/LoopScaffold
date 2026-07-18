@@ -37,7 +37,17 @@ test_path = re.compile(
 skip_pattern = re.compile(
     r"XCTSkip|\bxit\s*\(|\bxdescribe\s*\(|\.skip\s*\(|@Disabled|@Ignore\b|it\.todo|continue-on-error"
 )
-assert_pattern = re.compile(r"XCTAssert|#expect|XCTFail|\bexpect\s*\(|\bassert(?:\b|[A-Z_])")
+swift_testing_disabled_pattern = re.compile(
+    r"@(?:Test|Suite)\b(?:(?!\b(?:func|struct|class|actor|enum)\b).){0,1000}?\.disabled\s*\(",
+    re.DOTALL,
+)
+assert_pattern = re.compile(r"XCTAssert|#(?:expect|require)|XCTFail|\bexpect\s*\(|\bassert(?:\b|[A-Z_])")
+
+def skip_count(value: str) -> int:
+    return len(skip_pattern.findall(value)) + len(swift_testing_disabled_pattern.findall(value))
+
+def assertion_count(value: str) -> int:
+    return len(assert_pattern.findall(value))
 
 def normalize(path: str) -> str:
     return path.replace("\\", "/")
@@ -67,13 +77,13 @@ def read_existing(path: str) -> str:
 def check_test_change(paths: list[str], old: str, new: str) -> None:
     if not any(is_test_file(path) for path in paths):
         return
-    if skip_pattern.search(new) and not skip_pattern.search(old):
+    if skip_count(new) > skip_count(old):
         sys.stderr.write(
             "BLOCKED: this edit introduces a skip/disable marker into a test file.\n"
             "Fix the implementation; if the test is wrong, leave it for a human.\n"
         )
         sys.exit(2)
-    if assert_pattern.search(old) and not assert_pattern.search(new):
+    if assertion_count(new) < assertion_count(old):
         sys.stderr.write(
             "BLOCKED: this edit removes assertions from a test without replacing them.\n"
             "Weakening tests to get green is not allowed.\n"

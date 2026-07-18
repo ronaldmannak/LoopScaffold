@@ -254,7 +254,13 @@ class PolicyHookTests(unittest.TestCase):
     def test_entire_policy_trees_are_protected(self) -> None:
         cases = (
             (PROTECT_HOOKS[0], {"tool_input": {"file_path": ".claude/agents/reviewer.md", "new_string": "x"}}),
+            (PROTECT_HOOKS[0], {"tool_input": {"file_path": ".agents/skills/reviewer/SKILL.md", "new_string": "x"}}),
+            (PROTECT_HOOKS[0], {"tool_input": {"file_path": ".codex/hooks.json", "new_string": "x"}}),
+            (PROTECT_HOOKS[0], {"tool_input": {"file_path": "AGENTS.md", "new_string": "x"}}),
             (PROTECT_HOOKS[1], {"tool_input": {"file_path": ".claude/skills/verification/SKILL.md", "new_string": "x"}}),
+            (PROTECT_HOOKS[1], {"tool_input": {"file_path": ".agents/skills/reviewer/SKILL.md", "new_string": "x"}}),
+            (PROTECT_HOOKS[1], {"tool_input": {"file_path": ".codex/hooks.json", "new_string": "x"}}),
+            (PROTECT_HOOKS[1], {"tool_input": {"file_path": "AGENTS.md", "new_string": "x"}}),
             (PROTECT_HOOKS[2], codex_update_payload(".agents/skills/verification/SKILL.md", "old", "new")),
         )
         for (product, hook), payload in cases:
@@ -291,6 +297,44 @@ class PolicyHookTests(unittest.TestCase):
                 )
                 self.assertEqual(2, result.returncode)
                 self.assertIn("removes assertions", result.stderr)
+
+    def test_swift_testing_require_partial_assertion_removal_and_disabled_traits_are_protected(self) -> None:
+        cases = (
+            ("require", "#require(value != nil)", "let value = value"),
+            ("partial-assertion-removal", "#expect(first)\n#expect(second)", "#expect(first)"),
+            ("disabled-test", "@Test func feature() {}", '@Test(.disabled("later")) func feature() {}'),
+        )
+        for product, hook in PROTECT_HOOKS:
+            for case, old, new in cases:
+                payload = (
+                    codex_update_payload("Tests/FeatureTests.swift", old, new)
+                    if product == "codex"
+                    else {"tool_input": {
+                        "file_path": "Tests/FeatureTests.swift",
+                        "old_string": old,
+                        "new_string": new,
+                    }}
+                )
+                with self.subTest(product=product, case=case):
+                    result = invoke_hook(hook, payload)
+                    self.assertEqual(2, result.returncode)
+
+            swiftui_payload = (
+                codex_update_payload(
+                    "Tests/FeatureTests.swift",
+                    "let view = Button(\"Run\") {}",
+                    "let view = Button(\"Run\") {}.disabled(true)",
+                )
+                if product == "codex"
+                else {"tool_input": {
+                    "file_path": "Tests/FeatureTests.swift",
+                    "old_string": "let view = Button(\"Run\") {}",
+                    "new_string": "let view = Button(\"Run\") {}.disabled(true)",
+                }}
+            )
+            with self.subTest(product=product, case="swiftui-disabled-control"):
+                result = invoke_hook(hook, swiftui_payload)
+                self.assertEqual(0, result.returncode)
 
     def test_unittest_assertion_methods_cannot_be_removed(self) -> None:
         for product, hook in PROTECT_HOOKS:
@@ -384,6 +428,17 @@ class PolicyHookTests(unittest.TestCase):
                     self.assertEqual(2, result.returncode)
                     self.assertIn("nested shell command", result.stderr)
 
+    def test_bash_guards_block_subshell_wrapped_protected_commands(self) -> None:
+        blocked = (
+            "(git push origin main)",
+            "(rm PicoServerTests/PicoServerTests.swift)",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, command=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+
     def test_bash_guards_block_dynamic_shell_evaluation(self) -> None:
         blocked = (
             "echo $(git push --force origin main)",
@@ -394,7 +449,7 @@ class PolicyHookTests(unittest.TestCase):
         safe = (
             "printf %s '$(git push --force origin main)'",
             "printf %s '`gh pr merge 1`'",
-            r"echo \$(git push --force origin main)",
+            r"echo '\$(git push --force origin main)'",
             "echo $((1 + 2))",
         )
         for product, hook in GUARD_HOOKS:
@@ -422,6 +477,75 @@ class PolicyHookTests(unittest.TestCase):
                     self.assertIn("command-local Git alias", result.stderr)
             safe = invoke_hook(hook, {"tool_input": {"command": "git -c color.ui=false status"}})
             self.assertEqual(0, safe.returncode)
+
+    def test_bash_guards_block_persisted_git_aliases(self) -> None:
+        blocked_writes = (
+            "git config alias.p '!git push origin main'",
+            "git config --global --add alias.land '!gh pr merge'",
+            "git config set alias.ship '!git push --force origin main'",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked_writes:
+                with self.subTest(product=product, command=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("persisted Git alias", result.stderr)
+
+            with tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                run("git", "config", "alias.p", "!git push origin main", cwd=repo)
+                result = invoke_hook(hook, {"tool_input": {"command": "git p"}}, cwd=repo)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("Git alias command", result.stderr)
+
+            alias_read = invoke_hook(hook, {"tool_input": {"command": "git config --get alias.p"}})
+            self.assertEqual(0, alias_read.returncode)
+
+    def test_bash_guards_block_unsafe_gh_api_mutations(self) -> None:
+        blocked = (
+            "gh api repos/owner/repo/pulls/42/merge -X PUT",
+            "gh api repos/owner/repo/issues/42/comments -f body=automated",
+            "gh api graphql -f 'query=mutation { mergePullRequest(input: {}) { clientMutationId } }'",
+        )
+        safe = (
+            "gh api repos/owner/repo/pulls/42",
+            "gh api graphql -f 'query=query { viewer { login } }'",
+            "gh api repos/owner/repo/pulls/comments/42/reactions -f content=+1",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, blocked=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("mutating gh api", result.stderr)
+            for command in safe:
+                with self.subTest(product=product, safe=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(0, result.returncode)
+
+    def test_bash_guards_block_test_writes_through_shell_tools(self) -> None:
+        blocked = (
+            "sed -i .bak s/old/new/ PicoServerTests/AuthMiddlewareTests.swift",
+            'python3 -c "from pathlib import Path; Path(\'PicoServerTests/AuthMiddlewareTests.swift\').write_text(\'\')"',
+            "rm -rf PicoServerTests",
+            "printf weakened > Tests/FeatureTests.swift",
+        )
+        safe = (
+            "sed -n 1p PicoServerTests/AuthMiddlewareTests.swift",
+            "rg '#expect' PicoServerTests/AuthMiddlewareTests.swift",
+            'python3 -c "from pathlib import Path; Path(\'Sources/Feature.swift\').write_text(\'x\')"',
+        )
+        for product, hook in GUARD_HOOKS:
+            for command in blocked:
+                with self.subTest(product=product, blocked=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("writing test files through Bash", result.stderr)
+            for command in safe:
+                with self.subTest(product=product, safe=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(0, result.returncode)
 
     def test_bash_guards_block_policy_writes(self) -> None:
         blocked = (
