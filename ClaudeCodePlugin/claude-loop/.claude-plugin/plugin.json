@@ -1,6 +1,6 @@
 {
   "name": "claude-loop",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Autonomous issue-to-PR loop: /loop-init sets up a repo (rules, skills, agents, hooks, CI template, labels) and walks you through creating the GitHub-triggered routine. /loop-init again to update.",
   "author": {
     "name": "Ronald Mannak"

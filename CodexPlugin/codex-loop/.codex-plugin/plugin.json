@@ -1,6 +1,6 @@
 {
   "name": "codex-loop",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Autonomous issue-to-PR loop for OpenAI Codex: $loop-init sets up a repo (AGENTS.md rules, skills, hooks, trigger/converge/sweep GitHub Actions, labels). Label an issue codex-build and Codex implements, converges CI + reviews, and hands you a ready PR.",
   "author": { "name": "Ronald Mannak" },
   "license": "MIT",
