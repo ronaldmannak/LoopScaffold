@@ -193,6 +193,23 @@ policy_path = re.compile(
 def protected_policy_path(value: str) -> bool:
     return bool(policy_path.search(value.replace("\\", "/")))
 
+def find_exec_can_write(arguments: list[str]) -> bool:
+    actions = {"-exec", "-execdir", "-ok", "-okdir"}
+    mutators = {
+        "cp", "mv", "install", "touch", "mkdir", "rmdir", "rm", "unlink",
+        "truncate", "chmod", "chown", "chgrp", "ln", "tee", "patch", "ed",
+        "ex", "dd", "sed", "git", "find", "bash", "dash", "ksh", "sh",
+        "zsh", "node", "ruby", "perl", "php", "awk", "gawk", "mawk",
+        "env", "command", "sudo", "nice", "xargs",
+    }
+    for index, argument in enumerate(arguments[:-1]):
+        if argument not in actions:
+            continue
+        action = executable(arguments[index + 1])
+        if action.startswith("python") or action in mutators:
+            return True
+    return False
+
 def redirects_to_policy() -> bool:
     for index, token in enumerate(tokens[:-1]):
         if ">" in token and all(character in "<>&|" for character in token):
@@ -225,7 +242,7 @@ def command_writes_policy(name: str, start: int, end: int) -> bool:
             for argument in arguments
         )
     if name == "find":
-        return "-delete" in arguments
+        return "-delete" in arguments or find_exec_can_write(arguments)
     if name == "git":
         subcommand, _ = git_subcommand(start, end)
         return subcommand in {"add", "checkout", "restore", "rm", "mv", "clean", "reset"}
@@ -249,7 +266,7 @@ def command_writes_tests(name: str, start: int, end: int) -> bool:
             for argument in arguments
         )
     if name == "find":
-        return "-delete" in arguments
+        return "-delete" in arguments or find_exec_can_write(arguments)
     if name == "git":
         subcommand, _ = git_subcommand(start, end)
         return subcommand in {"checkout", "restore", "rm", "mv", "clean", "reset"}
@@ -322,7 +339,47 @@ def gh_subcommand(start: int, end: int):
             return token, index
     return "", end
 
-def gh_api_is_mutating(arguments: list[str]) -> bool:
+def graphql_query_uses_shell_expansion(source: str) -> bool:
+    """Return true when a query= shell word contains an expandable dollar."""
+    query_prefixes = (
+        "query=", "-fquery=", "-Fquery=", "--raw-field=query=", "--field=query=",
+    )
+    words = []
+    word = []
+    word_expands = False
+    quote = ""
+    escaped = False
+    for character in source:
+        if escaped:
+            word.append(character)
+            escaped = False
+            continue
+        if character == "\\" and quote != "'":
+            escaped = True
+            continue
+        if character == "'" and quote != '"':
+            quote = "" if quote == "'" else "'"
+            continue
+        if character == '"' and quote != "'":
+            quote = "" if quote == '"' else '"'
+            continue
+        if not quote and (character.isspace() or character in "|&;()"):
+            if word:
+                words.append(("".join(word), word_expands))
+                word = []
+                word_expands = False
+            continue
+        word.append(character)
+        if character == "$" and quote != "'":
+            word_expands = True
+    if word:
+        words.append(("".join(word), word_expands))
+    return any(
+        expands and any(value.startswith(prefix) for prefix in query_prefixes)
+        for value, expands in words
+    )
+
+def gh_api_is_mutating(arguments: list[str], source: str) -> bool:
     method = ""
     endpoint = ""
     fields = []
@@ -372,7 +429,11 @@ def gh_api_is_mutating(arguments: list[str]) -> bool:
 
     if endpoint == "graphql":
         queries = [field.split("=", 1)[1] for field in fields if field.startswith("query=")]
-        if not queries or any(query.startswith("@") for query in queries):
+        if (
+            not queries
+            or any(query.startswith("@") for query in queries)
+            or graphql_query_uses_shell_expansion(source)
+        ):
             return True
         return any(re.search(r"\bmutation\b", query, re.IGNORECASE) for query in queries)
 
@@ -408,6 +469,101 @@ def shell_uses_command_string(arguments: list[str]) -> bool:
         if argument.startswith("-") and not argument.startswith("--") and "c" in argument[1:]:
             return True
     return False
+
+def git_apply_is_read_only(arguments: list[str]) -> bool:
+    reporting = {"--check", "--stat", "--numstat", "--summary"}
+    return "--apply" not in arguments and any(argument in reporting for argument in arguments)
+
+def git_apply_patch_files(arguments: list[str]) -> list[str]:
+    takes_value = {
+        "-p", "-C", "--directory", "--exclude", "--include",
+        "--whitespace", "--build-fake-ancestor",
+    }
+    patch_files = []
+    index = 0
+    positional_only = False
+    while index < len(arguments):
+        argument = arguments[index]
+        if positional_only:
+            patch_files.append(argument)
+            index += 1
+        elif argument == "--":
+            positional_only = True
+            index += 1
+        elif argument in takes_value:
+            index += 2
+        elif argument.startswith(("--directory=", "--exclude=", "--include=", "--whitespace=", "--build-fake-ancestor=")):
+            index += 1
+        elif re.fullmatch(r"-[pC]\d+", argument):
+            index += 1
+        elif argument.startswith("-"):
+            index += 1
+        else:
+            patch_files.append(argument)
+            index += 1
+    return patch_files
+
+def git_apply_directories(arguments: list[str]) -> list[str]:
+    directories = []
+    for index, argument in enumerate(arguments):
+        if argument == "--directory" and index + 1 < len(arguments):
+            directories.append(arguments[index + 1])
+        elif argument.startswith("--directory="):
+            directories.append(argument.split("=", 1)[1])
+    return directories
+
+def git_patch_targets(source: str) -> list[str]:
+    targets = []
+    for line in source.splitlines():
+        candidates = []
+        if line.startswith("diff --git "):
+            try:
+                candidates = shlex.split(line)[2:4]
+            except ValueError:
+                return []
+        elif line.startswith(("--- ", "+++ ", "rename from ", "rename to ")):
+            prefix = next(prefix for prefix in ("--- ", "+++ ", "rename from ", "rename to ") if line.startswith(prefix))
+            try:
+                values = shlex.split(line[len(prefix):])
+            except ValueError:
+                return []
+            candidates = values[:1]
+        for candidate in candidates:
+            if candidate == "/dev/null":
+                continue
+            normalized = candidate.replace("\\", "/")
+            if normalized.startswith(("a/", "b/")):
+                normalized = normalized[2:]
+            targets.append(normalized)
+    return targets
+
+def git_apply_block_reason(arguments: list[str], prefix: list[str]) -> str:
+    directories = git_apply_directories(arguments)
+    git_context = "/".join(
+        prefix[index + 1]
+        for index, argument in enumerate(prefix[:-1])
+        if argument == "-C"
+    )
+    destination_prefix = "/".join([git_context, *directories]).strip("/")
+    if destination_prefix and (
+        test_path(destination_prefix) or protected_policy_path(destination_prefix)
+    ):
+        return "applying patch to protected files"
+    patch_files = git_apply_patch_files(arguments)
+    if not patch_files:
+        return "uninspectable git apply"
+    for patch_file in patch_files:
+        try:
+            source = open(patch_file, encoding="utf-8").read()
+        except (OSError, UnicodeError):
+            return "uninspectable git apply"
+        targets = git_patch_targets(source)
+        if not targets:
+            return "uninspectable git apply"
+        destinations = [f"{destination_prefix}/{path}".strip("/") for path in targets]
+        if any(test_path(path) or protected_policy_path(path) for path in destinations):
+            return "applying patch to protected files"
+    return ""
 
 def has_active_dynamic_evaluation(source: str) -> bool:
     """Detect shell constructs that can execute commands hidden from shlex."""
@@ -491,9 +647,13 @@ for index, token in enumerate(tokens):
             block("git clean -f/-d")
         elif subcommand == "rm" and any(test_path(arg) for arg in arguments):
             block("deleting test files")
+        elif subcommand == "apply" and not git_apply_is_read_only(arguments):
+            reason = git_apply_block_reason(arguments, tokens[index:sub_index])
+            if reason:
+                block(reason)
     elif name == "gh":
         subcommand, subcommand_index = gh_subcommand(index, end)
-        if subcommand == "api" and gh_api_is_mutating(tokens[subcommand_index + 1:end]):
+        if subcommand == "api" and gh_api_is_mutating(tokens[subcommand_index + 1:end], command):
             block("mutating gh api")
         words = positional_arguments(
             index + 1,

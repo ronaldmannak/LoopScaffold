@@ -336,6 +336,65 @@ class PolicyHookTests(unittest.TestCase):
                 result = invoke_hook(hook, swiftui_payload)
                 self.assertEqual(0, result.returncode)
 
+    def test_pascal_case_test_bundles_and_skip_relocation_are_protected(self) -> None:
+        old = (
+            '@Test(.disabled("later")) func first() {}\n'
+            '@Test func second() {}'
+        )
+        new = (
+            '@Test func first() {}\n'
+            '@Test(.disabled("later")) func second() {}'
+        )
+        for product, hook in PROTECT_HOOKS:
+            bundle_payload = (
+                codex_update_payload(
+                    "PicoMCPBridgeTests/AuthMiddleware.swift",
+                    "#expect(authorized)",
+                    "let authorized = true",
+                )
+                if product == "codex"
+                else {"tool_input": {
+                    "file_path": "PicoMCPBridgeTests/AuthMiddleware.swift",
+                    "old_string": "#expect(authorized)",
+                    "new_string": "let authorized = true",
+                }}
+            )
+            with self.subTest(product=product, case="pascal-case-test-bundle"):
+                result = invoke_hook(hook, bundle_payload)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("removes assertions", result.stderr)
+
+            relocation_payload = (
+                codex_update_payload("Tests/FeatureTests.swift", old, new)
+                if product == "codex"
+                else {"tool_input": {
+                    "file_path": "Tests/FeatureTests.swift",
+                    "old_string": old,
+                    "new_string": new,
+                }}
+            )
+            with self.subTest(product=product, case="relocated-skip-marker"):
+                result = invoke_hook(hook, relocation_payload)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("skip/disable marker", result.stderr)
+
+            preserved_payload = (
+                codex_update_payload(
+                    "Tests/FeatureTests.swift",
+                    '@Test(.disabled("later")) func first() {}',
+                    '@Test(.disabled("later")) func first() { /* documented */ }',
+                )
+                if product == "codex"
+                else {"tool_input": {
+                    "file_path": "Tests/FeatureTests.swift",
+                    "old_string": '@Test(.disabled("later")) func first() {}',
+                    "new_string": '@Test(.disabled("later")) func first() { /* documented */ }',
+                }}
+            )
+            with self.subTest(product=product, case="preserved-skip-marker"):
+                result = invoke_hook(hook, preserved_payload)
+                self.assertEqual(0, result.returncode)
+
     def test_unittest_assertion_methods_cannot_be_removed(self) -> None:
         for product, hook in PROTECT_HOOKS:
             with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
@@ -507,10 +566,13 @@ class PolicyHookTests(unittest.TestCase):
             "gh api repos/owner/repo/pulls/42/merge -X PUT",
             "gh api repos/owner/repo/issues/42/comments -f body=automated",
             "gh api graphql -f 'query=mutation { mergePullRequest(input: {}) { clientMutationId } }'",
+            "M='mutation { mergePullRequest(input: {}) { clientMutationId } }'; gh api graphql -f query=\"$M\"",
+            "M='mutation { mergePullRequest(input: {}) { clientMutationId } }'; gh api graphql --raw-field=query=\"$M\"",
         )
         safe = (
             "gh api repos/owner/repo/pulls/42",
             "gh api graphql -f 'query=query { viewer { login } }'",
+            "gh api graphql -f 'query=query($owner:String!){repository(owner:$owner,name:\"repo\"){id}}' -F owner=octocat",
             "gh api repos/owner/repo/pulls/comments/42/reactions -f content=+1",
         )
         for product, hook in GUARD_HOOKS:
@@ -529,11 +591,13 @@ class PolicyHookTests(unittest.TestCase):
             "sed -i .bak s/old/new/ PicoServerTests/AuthMiddlewareTests.swift",
             'python3 -c "from pathlib import Path; Path(\'PicoServerTests/AuthMiddlewareTests.swift\').write_text(\'\')"',
             "rm -rf PicoServerTests",
+            "find Tests -type f -exec rm {} +",
             "printf weakened > Tests/FeatureTests.swift",
         )
         safe = (
             "sed -n 1p PicoServerTests/AuthMiddlewareTests.swift",
             "rg '#expect' PicoServerTests/AuthMiddlewareTests.swift",
+            "find Tests -type f -exec rg '#expect' {} +",
             'python3 -c "from pathlib import Path; Path(\'Sources/Feature.swift\').write_text(\'x\')"',
         )
         for product, hook in GUARD_HOOKS:
@@ -545,6 +609,61 @@ class PolicyHookTests(unittest.TestCase):
             for command in safe:
                 with self.subTest(product=product, safe=command):
                     result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(0, result.returncode)
+
+    def test_bash_guards_inspect_git_apply_patch_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            test_patch = repo / "weaken-tests.patch"
+            test_patch.write_text(
+                "diff --git a/Tests/FeatureTests.swift b/Tests/FeatureTests.swift\n"
+                "--- a/Tests/FeatureTests.swift\n"
+                "+++ b/Tests/FeatureTests.swift\n"
+                "@@ -1 +1 @@\n"
+                "-#expect(feature())\n"
+                "+let result = feature()\n",
+                encoding="utf-8",
+            )
+            source_patch = repo / "source.patch"
+            source_patch.write_text(
+                "diff --git a/Sources/Feature.swift b/Sources/Feature.swift\n"
+                "--- a/Sources/Feature.swift\n"
+                "+++ b/Sources/Feature.swift\n"
+                "@@ -1 +1 @@\n"
+                "-let enabled = false\n"
+                "+let enabled = true\n",
+                encoding="utf-8",
+            )
+            for product, hook in GUARD_HOOKS:
+                with self.subTest(product=product, case="test-patch"):
+                    result = invoke_hook(
+                        hook,
+                        {"tool_input": {"command": "git apply weaken-tests.patch"}},
+                        cwd=repo,
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("protected files", result.stderr)
+                with self.subTest(product=product, case="source-patch"):
+                    result = invoke_hook(
+                        hook,
+                        {"tool_input": {"command": "git apply source.patch"}},
+                        cwd=repo,
+                    )
+                    self.assertEqual(0, result.returncode)
+                with self.subTest(product=product, case="directory-remap"):
+                    result = invoke_hook(
+                        hook,
+                        {"tool_input": {"command": "git apply --directory=Tests source.patch"}},
+                        cwd=repo,
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("protected files", result.stderr)
+                with self.subTest(product=product, case="check-only"):
+                    result = invoke_hook(
+                        hook,
+                        {"tool_input": {"command": "git apply --check weaken-tests.patch"}},
+                        cwd=repo,
+                    )
                     self.assertEqual(0, result.returncode)
 
     def test_bash_guards_block_policy_writes(self) -> None:

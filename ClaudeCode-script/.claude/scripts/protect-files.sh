@@ -11,6 +11,7 @@ HOOK_INPUT="$(cat)"
 HOOK_INPUT="$HOOK_INPUT" python3 <<'PY'
 import json
 import os
+from collections import Counter
 from pathlib import Path
 import re
 import sys
@@ -44,7 +45,8 @@ test_path = re.compile(
     r"|\.xctestplan$",
     re.IGNORECASE,
 )
-if not test_path.search(normalized_path):
+swift_test_bundle_path = re.compile(r"(^|/)[^/]*Tests(/|$)")
+if not (test_path.search(normalized_path) or swift_test_bundle_path.search(normalized_path)):
     sys.exit(0)
 
 edits = tool_input.get("edits") or [{
@@ -69,9 +71,34 @@ swift_testing_disabled_pattern = re.compile(
     re.DOTALL,
 )
 assert_pattern = re.compile(r"XCTAssert|#(?:expect|require)|XCTFail|\bexpect\s*\(|\bassert(?:\b|[A-Z_])")
+declaration_pattern = re.compile(
+    r"\b(?:func|def|function|class|struct|actor|enum)\s+([A-Za-z_]\w*)"
+)
 
-def skip_count(value: str) -> int:
-    return len(skip_pattern.findall(value)) + len(swift_testing_disabled_pattern.findall(value))
+def skip_sites(value: str) -> Counter[tuple[str, str]]:
+    sites = Counter()
+    matches = [*skip_pattern.finditer(value), *swift_testing_disabled_pattern.finditer(value)]
+    declarations = list(declaration_pattern.finditer(value))
+    for match in matches:
+        marker = re.sub(r"\s+", "", match.group(0)).lower()
+        previous = [item for item in declarations if item.end() <= match.start()]
+        following = [item for item in declarations if item.start() >= match.end()]
+        identity = ""
+        prefer_following = marker.startswith("@") or ".skip(" in marker or "it.todo" in marker
+        if prefer_following and following and following[0].start() - match.end() <= 1000:
+            identity = following[0].group(1)
+        elif previous and match.start() - previous[-1].end() <= 1000:
+            identity = previous[-1].group(1)
+        elif following and following[0].start() - match.end() <= 1000:
+            identity = following[0].group(1)
+        if not identity:
+            line_start = value.rfind("\n", 0, match.start()) + 1
+            line_end = value.find("\n", match.end())
+            if line_end < 0:
+                line_end = len(value)
+            identity = re.sub(r"\s+", " ", value[line_start:line_end].strip())
+        sites[(marker, identity)] += 1
+    return sites
 
 def assertion_count(value: str) -> int:
     return len(assert_pattern.findall(value))
@@ -79,7 +106,7 @@ def assertion_count(value: str) -> int:
 for edit in edits:
     old = edit.get("old_string", "") or ""
     new = edit.get("new_string", "") or ""
-    if skip_count(new) > skip_count(old):
+    if skip_sites(new) - skip_sites(old):
         sys.stderr.write(
             "BLOCKED: this edit introduces a skip/disable marker into a test file.\n"
             "Fix the implementation; if the test is wrong, leave it for a human.\n"
