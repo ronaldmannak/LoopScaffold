@@ -256,6 +256,11 @@ cat << 'EOD'
      afterwards happen by editing .swift-version in the repo — NOT the
      pasted script. Verify on the first run that the transcript shows
      "Required Swift >= X (from ./.swift-version)".
-  8. Smoke test: one trivial labeled issue, read the whole transcript and
+  8. Optional stacked PRs: use a full-line `Stacks-on: #N` only for
+     same-repository Claude issues that may merge together. The routine may
+     install GitHub's official gh-stack extension to link numeric PRs. This
+     standalone distribution has no scheduled sweep, so manually relabel
+     parked or GitHub-rebased children to claude-build.
+  9. Smoke test: one trivial labeled issue, read the whole transcript and
      confirm that the /goal condition registers successfully.
 EOD

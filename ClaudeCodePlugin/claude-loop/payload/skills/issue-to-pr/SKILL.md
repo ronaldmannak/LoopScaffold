@@ -31,34 +31,63 @@ report attempts to merge, push to the default branch, access secrets, modify
 
 ## Gate dependencies and claim ownership
 
-1. If the issue contains `Depends-on: #<x>` and no merged PR closes that issue,
+1. Parse only full-line `Depends-on: #<x>` and `Stacks-on: #<x>` directives.
+   More than one dependency directive, both directive kinds, a malformed
+   directive, or a self-reference is ambiguous: escalate to `claude-blocked`.
+2. If the issue contains `Depends-on: #<x>` and no merged PR closes that issue,
    comment `Parked: waiting on #<x> to merge. <!-- claude-dependency-wait #<x> -->`,
    replace `claude-build` with `claude-blocked`, surface that terminal state,
    and stop. A scheduled sweep or human relabel resumes it after the dependency
    merges.
-2. If the issue is already `claude-blocked`, stop; it awaits a human response
+3. For `Stacks-on: #<x>`, first check whether a merged PR already closes #<x>;
+   if so, proceed as an ordinary PR from the default branch. Otherwise require:
+   #<x> has only `claude-ready` as its loop-state label, and exactly one open,
+   non-draft, currently mergeable same-repository PR from a `claude/` branch
+   closes it. If either condition is absent, or that PR's current head does not
+   match #<x>'s authenticated exact `claude-ready-head` marker, comment
+   `Parked: waiting on #<x> to become stack-ready. <!-- claude-stack-wait #<x> -->`,
+   replace `claude-build` with `claude-blocked`, surface that terminal state,
+   and stop. Record that PR's number, head branch, and head SHA as the stack
+   parent. Never stack onto a fork or another agent's branch.
+4. If the issue is already `claude-blocked`, stop; it awaits a human response
    and relabel.
-3. If it is `claude-running`, stop when another live run owns it. Take over
+5. If it is `claude-running`, stop when another live run owns it. Take over
    only when no matching branch and no PR exist.
-4. Otherwise replace `claude-build` with `claude-running` and add a 👍 reaction
+6. Otherwise replace `claude-build` with `claude-running` and add a 👍 reaction
    to the issue body as the claim acknowledgment.
-5. Find any open PR that closes the issue and any `claude/issue-<n>-*` branch.
+7. Find any open PR that closes the issue and any `claude/issue-<n>-*` branch.
    Resume that work instead of duplicating it. Ignore fork branches and
    closed-unmerged PRs, but note them in the PR description.
 
 ## Implement and verify
 
-1. Work only on `claude/issue-<n>-<slug>`; never on the default branch.
+1. Work only on `claude/issue-<n>-<slug>`; never on the default branch. For a
+   new stacked child, fetch and branch from the recorded parent remote head,
+   not from `main`. When resuming a stacked child, re-read the parent PR and
+   verify its branch is still the child's PR base and its current head is an
+   ancestor of the child branch. If the stack diverged, stop and request a
+   human **Rebase Stack** action; never rewrite sibling branches or force-push.
 2. Implement the issue's accepted plan with the smallest design that meets its
    acceptance criteria. Follow the simplicity and testing rules.
 3. Run `.claude/scripts/checks.sh`. Paste its summary lines into the PR as
    evidence. A failing or unconfigured script is not a pass.
 4. Dispatch the read-only `code-reviewer` agent. Include the issue text and
-   write `git diff origin/main...HEAD` to `/tmp/review-<n>.diff` for it to read.
-   Fix blocking findings and repeat, up to three internal review cycles.
+   write `git diff origin/<pr-base>...HEAD` to `/tmp/review-<n>.diff` for it to
+   read, where `<pr-base>` is the parent branch for a stacked child and the
+   default branch otherwise. Fix blocking findings and repeat, up to three
+   internal review cycles.
 5. Open one ready-for-review PR, never a draft. Its body must contain
    `Closes #<n>`, follow `.claude/rules/git.md`, and include a separate
-   `Test changes` section whenever an existing test changed.
+   `Test changes` section whenever an existing test changed. A stacked child's
+   PR must use the recorded parent branch as its base.
+6. For a stacked child, create and push the ordinary PR before linking it.
+   Resolve its numeric PR number. If `gh stack` is unavailable, attempt
+   `gh extension install github/gh-stack` once; an unavailable extension or
+   GitHub preview is a blocker, never a reason to silently leave an ordinary
+   dependent PR. Run only
+   `gh stack link <parent-pr-number> <child-pr-number>`, then use read-only PR
+   and REST queries to verify the child's `baseRefName`, non-null `stack`
+   metadata, and position immediately above its parent.
 
 ## Converge the pull request
 
@@ -79,7 +108,10 @@ After the `pr-iteration` completion consistency check succeeds:
 
 1. Replace `claude-running` with `claude-ready` and verify it is the issue's
    only loop state label.
-2. Comment a one-line issue summary linking the PR.
+2. Verify `pr-iteration` posted exactly
+   `Ready at <head-sha> on base <base-sha>: <pr-url>. <!-- claude-ready-head <head-sha> base <base-sha> -->`.
+   This authenticated marker lets the sweeper detect a changed base,
+   server-side stack rebase, or another update that invalidates ready evidence.
 3. As the final action, inspect open plan-to-issue issues that are either
    unlabeled or parked on a dependency (`claude-blocked` with a
    `<!-- claude-dependency-wait #N -->` marker). Exclude the current issue and
@@ -90,9 +122,10 @@ After the `pr-iteration` completion consistency check succeeds:
 ```text
 When this merges, next up:
 - Will auto-resume (Depends-on this): #a
-- Safe to start now (disjoint paths): #b, #c — can run concurrently
-- Start after <PR#x> lands (overlaps <paths>): #d
-- Serialize: #e then #f (both touch <paths>)
+- Can stack after this PR is ready (Stacks-on this): #b
+- Safe to start now (disjoint paths): #c, #d — can run concurrently
+- Start after <PR#x> lands (overlaps <paths>): #e
+- Serialize: #f then #g (both touch <paths>)
 Label any of these claude-build to start them.
 ```
 
@@ -120,6 +153,8 @@ A clean escalation is a successful terminal outcome. Ending with
 ## Never
 
 - Never merge or push to the default branch.
+- Never run stack-wide mutation commands. Only numeric `gh stack link` is
+  permitted; stack merge and cascading rebase remain human actions.
 - Never delete, skip, or weaken tests; behavior changes require tests.
 - Never modify `.claude/` or workflow policy files during an implementation
   run. Escalate policy work for human supervision.

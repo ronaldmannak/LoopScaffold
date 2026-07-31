@@ -107,6 +107,89 @@ jobs:
               fi
             fi
           done
+      - name: Unpark children whose stack parent is ready
+        if: github.event_name != 'issues'
+        run: |
+          if ! ISSUES=$(gh issue list -R "$R" --limit 1000 --label codex-blocked --state open --json number --jq '.[].number'); then
+            echo "::error::Could not list blocked stack children"
+            exit 1
+          fi
+          [ -z "$ISSUES" ] && exit 0
+          if ! OPEN_PRS=$(gh pr list -R "$R" --state open --limit 1000 \
+            --json number,body,headRefName,headRefOid,baseRefOid,isCrossRepository,isDraft,mergeable); then
+            echo "::error::Could not list open pull requests"
+            exit 1
+          fi
+          for N in $ISSUES; do
+            if ! COMMENT_ROWS=$(gh api "repos/$R/issues/$N/comments?per_page=100" --paginate \
+              --jq '.[] | [.id, .user.login, .body] | @tsv'); then
+              echo "::warning::Could not inspect stack markers for issue #$N"
+              continue
+            fi
+            WAIT_ROW=$(printf '%s\n' "$COMMENT_ROWS" | awk -F '\t' \
+              '$2 == "chatgpt-codex-connector[bot]" && $3 ~ /^Parked: waiting on #[0-9]+ to become stack-ready\. <!-- codex-stack-wait #[0-9]+ -->$/ { row=$0 } END { print row }')
+            [ -z "$WAIT_ROW" ] && continue
+            WAIT_ID=${WAIT_ROW%%$'\t'*}
+            WAIT_BODY=${WAIT_ROW#*$'\t'}
+            WAIT_BODY=${WAIT_BODY#*$'\t'}
+            DEP=$(printf '%s\n' "$WAIT_BODY" | grep -oE 'codex-stack-wait #[0-9]+' | grep -oE '[0-9]+')
+            RESUME_BODY="Stack parent #$DEP is ready — resuming via workflow dispatch. <!-- codex-stack-resumed #$DEP -->"
+            RESUMED_ID=$(printf '%s\n' "$COMMENT_ROWS" | awk -F '\t' -v expected="$RESUME_BODY" \
+              '$2 == "github-actions[bot]" && $3 == expected { id=$1 } END { print id }')
+            if [ -n "$RESUMED_ID" ] && [ "$RESUMED_ID" -gt "$WAIT_ID" ]; then
+              continue
+            fi
+            if ! PARENT_ISSUE=$(gh issue view "$DEP" -R "$R" --json labels,body); then
+              echo "::warning::Could not inspect stack parent issue #$DEP"
+              continue
+            fi
+            LABELS=$(printf '%s' "$PARENT_ISSUE" | jq -r '.labels[].name')
+            PARENT_ISSUE_BODY=$(printf '%s' "$PARENT_ISSUE" | jq -r '.body // ""')
+            STATE_COUNT=$(printf '%s\n' "$LABELS" | grep -Ec '^codex-(build|running|ready|blocked)$' || true)
+            [ "$STATE_COUNT" -eq 1 ] || continue
+            printf '%s\n' "$LABELS" | grep -Fxq codex-ready || continue
+            MATCHING_PRS=$(printf '%s' "$OPEN_PRS" | jq -c --arg dep "$DEP" '
+              [.[] | select(
+                (.isCrossRepository | not)
+                and (.isDraft | not)
+                and (.mergeable == "MERGEABLE")
+                and (.headRefName | startswith("codex/"))
+                and ((.body // "") | test(
+                  "(?i)closes[[:space:]]+#" + $dep + "([^0-9]|$)"
+                ))
+              )]')
+            [ "$(printf '%s' "$MATCHING_PRS" | jq 'length')" -eq 1 ] || continue
+            PARENT_SHA=$(printf '%s' "$MATCHING_PRS" | jq -r '.[0].headRefOid')
+            PARENT_BASE_SHA=$(printf '%s' "$MATCHING_PRS" | jq -r '.[0].baseRefOid')
+            if ! PARENT_COMMENTS=$(gh api "repos/$R/issues/$DEP/comments?per_page=100" --paginate --slurp); then
+              echo "::warning::Could not inspect ready-head marker for stack parent #$DEP"
+              continue
+            fi
+            PARENT_READY_BODY=$(printf '%s' "$PARENT_COMMENTS" | jq -r '
+              [.. | objects | select(
+                .user.login == "chatgpt-codex-connector[bot]"
+                and ((.body // "") | test(
+                  "^Ready at [0-9a-f]+ on base [0-9a-f]+: https://[^[:space:]]+\\. <!-- codex-ready-head [0-9a-f]+ base [0-9a-f]+ -->$"
+                ))
+              )] | last | .body // ""')
+            PARENT_MARKER_HEAD=$(printf '%s\n' "$PARENT_READY_BODY" | grep -oE 'codex-ready-head [0-9a-f]+' | awk '{print $2}' || true)
+            PARENT_MARKER_BASE=$(printf '%s\n' "$PARENT_READY_BODY" | grep -oE 'codex-ready-head [0-9a-f]+ base [0-9a-f]+' | awk '{print $4}' || true)
+            [ "$PARENT_MARKER_HEAD" = "$PARENT_SHA" ] || continue
+            PARENT_STACK_DIRECTIVES=$(printf '%s\n' "$PARENT_ISSUE_BODY" | grep -Eic '^Stacks-on: #[0-9]+[[:space:]]*$' || true)
+            if [ "$PARENT_STACK_DIRECTIVES" -eq 1 ]; then
+              [ "$PARENT_MARKER_BASE" = "$PARENT_BASE_SHA" ] || continue
+            elif [ "$PARENT_STACK_DIRECTIVES" -gt 1 ]; then
+              continue
+            fi
+            if gh workflow run codex-build-trigger.yml -R "$R" \
+              -f issue_number="$N" -f expected_label=codex-blocked \
+              -f mode=build -f reason=stack-ready; then
+              gh issue comment "$N" -R "$R" --body "$RESUME_BODY"
+            else
+              echo "::error::Could not dispatch stack child issue #$N"
+              exit 1
+            fi
+          done
       - name: Resume completed external CI or recover dead runs
         if: github.event_name != 'issues'
         run: |
@@ -369,7 +452,7 @@ jobs:
               fi
             fi
           done
-      - name: Send conflicted ready PRs back for rebase
+      - name: Reconverge changed or conflicted ready PRs
         if: github.event_name != 'issues'
         run: |
           if ! PRS=$(gh pr list -R "$R" --limit 1000 --state open --json number,headRefName --jq '.[] | select(.headRefName | startswith("codex/")) | .number'); then
@@ -377,27 +460,58 @@ jobs:
             exit 1
           fi
           for PR in $PRS; do
-            if ! M=$(gh pr view "$PR" -R "$R" --json mergeable --jq .mergeable); then
-              echo "::warning::Could not inspect mergeability for PR #$PR"
+            if ! PR_DATA=$(gh pr view "$PR" -R "$R" \
+              --json mergeable,body,headRefOid,baseRefOid); then
+              echo "::warning::Could not inspect current state for PR #$PR"
               continue
             fi
-            if ! BODY=$(gh pr view "$PR" -R "$R" --json body --jq '.body // ""'); then
-              echo "::warning::Could not inspect body for PR #$PR"
-              continue
-            fi
+            M=$(printf '%s' "$PR_DATA" | jq -r .mergeable)
+            BODY=$(printf '%s' "$PR_DATA" | jq -r '.body // ""')
+            HEAD_SHA=$(printf '%s' "$PR_DATA" | jq -r .headRefOid)
+            BASE_SHA=$(printf '%s' "$PR_DATA" | jq -r .baseRefOid)
             N=$(printf '%s\n' "$BODY" | grep -oiE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
             [ -z "$N" ] && continue
-            if ! LABELS=$(gh issue view "$N" -R "$R" --json labels --jq '.labels[].name'); then
+            if ! ISSUE_DATA=$(gh issue view "$N" -R "$R" --json labels,body); then
               echo "::warning::Could not inspect linked issue #$N for PR #$PR"
               continue
             fi
-            if [ "$M" = "CONFLICTING" ] && printf '%s\n' "$LABELS" | grep -Fxq codex-ready; then
+            LABELS=$(printf '%s' "$ISSUE_DATA" | jq -r '.labels[].name')
+            ISSUE_BODY=$(printf '%s' "$ISSUE_DATA" | jq -r '.body // ""')
+            printf '%s\n' "$LABELS" | grep -Fxq codex-ready || continue
+            if ! READY_COMMENT_PAGES=$(gh api "repos/$R/issues/$N/comments?per_page=100" --paginate --slurp); then
+              echo "::warning::Could not inspect ready-head markers for issue #$N"
+              continue
+            fi
+            READY_BODY=$(printf '%s' "$READY_COMMENT_PAGES" | jq -r '
+              [.. | objects | select(
+                .user.login == "chatgpt-codex-connector[bot]"
+                and ((.body // "") | test(
+                  "^Ready at [0-9a-f]+ on base [0-9a-f]+: https://[^[:space:]]+\\. <!-- codex-ready-head [0-9a-f]+ base [0-9a-f]+ -->$"
+                ))
+              )] | last | .body // ""')
+            MARKER_HEAD=$(printf '%s\n' "$READY_BODY" | grep -oE 'codex-ready-head [0-9a-f]+' | awk '{print $2}' || true)
+            MARKER_BASE=$(printf '%s\n' "$READY_BODY" | grep -oE 'codex-ready-head [0-9a-f]+ base [0-9a-f]+' | awk '{print $4}' || true)
+            STACK_DIRECTIVES=$(printf '%s\n' "$ISSUE_BODY" | grep -Eic '^Stacks-on: #[0-9]+[[:space:]]*$' || true)
+            REASON=""
+            COMMENT=""
+            if [ -n "$MARKER_HEAD" ] && [ "$MARKER_HEAD" != "$HEAD_SHA" ]; then
+              REASON=head-updated
+              COMMENT="PR head changed; sending back for current-state reconvergence via workflow dispatch."
+            elif [ "$STACK_DIRECTIVES" -eq 1 ] && \
+              { [ -z "$MARKER_HEAD" ] || [ -z "$MARKER_BASE" ] || [ "$MARKER_BASE" != "$BASE_SHA" ]; }; then
+              REASON=head-updated
+              COMMENT="Stack readiness marker or parent changed; sending child back for current-state reconvergence via workflow dispatch."
+            elif [ "$M" = "CONFLICTING" ]; then
+              REASON=rebase-conflict
+              COMMENT="Base moved; sending back for rebase + reconvergence via workflow dispatch."
+            fi
+            if [ -n "$REASON" ]; then
               if gh workflow run codex-build-trigger.yml -R "$R" \
                 -f issue_number="$N" -f expected_label=codex-ready \
-                -f mode=event -f reason=rebase-conflict; then
-                gh issue comment "$N" -R "$R" --body "Base moved; sending back for rebase + reconvergence via workflow dispatch."
+                -f mode=event -f reason="$REASON"; then
+                gh issue comment "$N" -R "$R" --body "$COMMENT"
               else
-                echo "::error::Could not redispatch conflicted issue #$N; leaving it ready for the next sweep"
+                echo "::error::Could not redispatch changed issue #$N; leaving it ready for the next sweep"
                 exit 1
               fi
             fi

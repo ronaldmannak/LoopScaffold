@@ -70,6 +70,11 @@ your Anthropic account. `/claude-loop:loop-init` prints the compact `/goal`, the
 Claude routine UI. The longer implementation procedure is installed in
 `.claude/skills/issue-to-pr/SKILL.md` and is read by each cloud run.
 
+After updating to a release with stacked-PR support, a project opts in per
+dependent issue with a full-line `Stacks-on: #N`. Re-paste both the
+implementation goal and optional sweep prompt before using it; stack merges and
+cascading rebases remain human actions.
+
 ## Update an existing repository
 
 You normally update in place; do not remove `.claude/` first. Deleting it would

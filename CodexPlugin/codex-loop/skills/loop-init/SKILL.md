@@ -19,6 +19,13 @@ If AGENTS.md contains `<!-- codex-loop:start`, replace the complete marker-delim
 - Scripts → `.codex/scripts/`: copy all EXCEPT checks.sh, which is copied only if absent (per-repo config; never overwrite). `chmod +x .codex/scripts/*.sh`
 - Hooks → move the preflighted temporary file from step 1 to `.codex/hooks.json`. It contains the two current loop-owned `PreToolUse` hooks while preserving unrelated hook events/entries.
 - Workflows → `.github/workflows/`: copy each codex-*.yml file only when its destination is absent. On update, never overwrite an existing workflow: show the diff against the payload template and ask the user to merge scaffold changes while preserving local configuration. In particular, preserve the configured CI workflow name in codex-converge-trigger.yml, any Xcode Cloud removal of its workflow_run trigger, and local customizations to the `@codex` task prompt in codex-build-trigger.yml.
+- Stacked PRs are opt-in per issue with `Stacks-on: #N`. For an updated
+  repository that will use them, explicitly require the user to merge the
+  template changes for all three Codex workflows: stack-ready dispatch in the
+  build trigger, `pull_request.synchronize` head-update wakes in the converge
+  trigger, and stack-child unparking in the sweeper. The task installs the
+  official `github/gh-stack` extension on demand and only links numeric PRs;
+  stack merge and cascading rebase remain human actions.
 
 ## 4. Seeds & GitHub
 - Swift repo without `.swift-version`: write `6.3.3`; Xcode projects must configure checks.sh BUILD/TEST arrays.
@@ -37,3 +44,7 @@ Show `git status --short -- AGENTS.md .agents .codex .github/workflows/codex-bui
 4. After CI is confirmed, smoke test: `gh issue create --label codex-build --title "..." --body "<plan-to-issue format>"` with something trivial, then watch `Codex build trigger` in GitHub Actions. Confirm the GitHub App reacts to the workflow's bot-authored `@codex` comment and starts a cloud task; in the cloud task, verify that hooks fired and checks.sh evidence was pasted. During convergence, verify that at most one issue carries `codex-event-active` and that the task removes it before exiting.
 5. Enable Codex code review and automatic reviews for this repository. The external-review gate waits 20 minutes after each push before requesting `@codex review` once, accepts a Codex-bot 👍 as a no-findings pass, and escalates for human intervention if neither 👍 nor a submitted review arrives within 60 minutes of that request.
 6. Coexistence note: this loop uses codex-* labels and codex/ branches; it can run beside the claude-loop plugin (claude-* labels, claude/ branches) in the same repo for A/B comparison — same issue format, same checks.sh oracle.
+7. Optional stacked PRs: use a full-line `Stacks-on: #N` only when both issues
+   use this Codex loop and may merge together. Use `Depends-on: #N` when the
+   lower change must merge or deploy separately. Confirm updated projects
+   merged all three workflow migrations before labeling a stack child.

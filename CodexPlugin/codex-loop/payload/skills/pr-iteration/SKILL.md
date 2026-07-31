@@ -30,7 +30,7 @@ Waiting is done with BLOCKING commands, which cost no tokens and wake the instan
 
 **BUILD MODE (split-architecture producer).** Implement or resume the issue, run local verification and internal review, open or update the ready-for-review PR, push one coherent implementation, and exit with the linked issue still carrying only `codex-running`. Do NOT wait for CI, invoke external review, run the completion consistency check, or mark the issue ready. CI/review completions start EVENT MODE tasks; this handoff is the intended nonterminal boundary and prevents a waiting producer from racing the converger.
 
-**EVENT MODE (split-architecture converger — for very slow CI).** You are woken by a CI completion, PR feedback, or the queue sweeper's review-deadline backstop; sessions are not reused across events. Read the CURRENT full PR state (other events may have landed since the wake reason), act ONCE — one coherent fix batch, a terminal action (codex-ready / escalate), a one-time `@codex review` request when the 20-minute threshold is reached, or no change while another configured provider/review signal is pending — and exit. Never enter a blocking watch in this mode. On a review-deadline wake, inspect the exact request's Codex-bot reactions and submitted reviews: 👀 remains pending, 👍 passes, and 60 minutes with neither 👍 nor a review requires `codex-blocked` human escalation. Your push re-runs CI, which wakes the next session; the re-fire IS the loop. Iteration counting is cross-session: count fix commits on the branch (`git log origin/main..HEAD --oneline | grep -c 'fix(ci)'`) — at 8, escalate instead of pushing. This task owns the `codex-event-active` lease; remove that label as the final GitHub action on every normal exit, after setting the correct state label. Never remove `codex-event-pending`; the sweeper coalesces it into one follow-up task after the lease is released.
+**EVENT MODE (split-architecture converger — for very slow CI).** You are woken by a CI completion, PR feedback, a head update, or the queue sweeper's review-deadline backstop; sessions are not reused across events. Read the CURRENT full PR state (other events may have landed since the wake reason), act ONCE — one coherent fix batch, a terminal action (codex-ready / escalate), a one-time `@codex review` request when the 20-minute threshold is reached, or no change while another configured provider/review signal is pending — and exit. Never enter a blocking watch in this mode. On a review-deadline wake, inspect the exact request's Codex-bot reactions and submitted reviews: 👀 remains pending, 👍 passes, and 60 minutes with neither 👍 nor a review requires `codex-blocked` human escalation. Your push re-runs CI, which wakes the next session; the re-fire IS the loop. Iteration counting is cross-session: resolve and fetch the PR's current `baseRefName`, then count only fix commits in `origin/<base>..HEAD` (`git log "origin/$BASE_REF"..HEAD --oneline | grep -c 'fix(ci)'`) — at 8, escalate instead of pushing. This task owns the `codex-event-active` lease; remove that label as the final GitHub action on every normal exit, after setting the correct state label. Never remove `codex-event-pending`; the sweeper coalesces it into one follow-up task after the lease is released.
 4. The PR description contains the evidence required by the AGENTS.md loop rules.
 
 ## Loop procedure
@@ -38,7 +38,17 @@ Waiting is done with BLOCKING commands, which cost no tokens and wake the instan
 Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or on the same check failing 3 times in a row, stop and escalate (see below).
 
 1. **Snapshot state against the current head:**
-   - `HEAD_SHA=$(gh pr view <pr> --json headRefOid --jq .headRefOid)` — record it.
+   - Read `headRefOid`, `baseRefOid`, `baseRefName`, and `headRefName` together
+     with `gh pr view`. Record `HEAD_SHA`, `BASE_SHA`, and `BASE_REF`, then
+     fetch both remote branches. All diffs and commit counts use
+     `origin/$BASE_REF...HEAD`, never a hard-coded `origin/main`.
+   - For an actively stacked `Stacks-on:` PR, verify the read-only REST `stack`
+     object is present, the direct base is the lower PR's head branch, and the
+     current lower head is an ancestor of the child. If the lower issue is now
+     closed by a merged PR, use the child's current retargeted base as an
+     ordinary layer; native stack metadata may remain. Otherwise a missing or
+     divergent stack requires a human **Rebase Stack** action and a blocked
+     issue; never run a cascading rebase or force-push siblings.
    - `gh pr checks <pr>` (interactive sessions may use `--watch`; routines poll with sleep, don't spin).
      Checks count only if they are COMPLETED (not queued/in-progress) and apply to $HEAD_SHA.
    - `gh pr view <pr> --comments` and `gh api repos/{owner}/{repo}/pulls/<pr>/comments` for review threads.
@@ -61,7 +71,11 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 1. Re-read the head SHA: `gh pr view <pr> --json headRefOid --jq .headRefOid`.
 2. If it differs from the $HEAD_SHA your status snapshot used, discard the snapshot and return to step 1 — green checks for a stale commit prove nothing.
 3. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
-4. For a loop-managed PR linked with `Closes #N`, replace `codex-running`
+4. Resolve the linked issue and PR URL. Before changing labels, ensure the
+   issue has an authenticated exact comment
+   `Ready at <head-sha> on base <base-sha>: <pr-url>. <!-- codex-ready-head <head-sha> base <base-sha> -->`;
+   post it once when absent. If the comment fails, do not mark the issue ready.
+5. For a loop-managed PR linked with `Closes #N`, replace `codex-running`
    with `codex-ready`, then verify the issue has exactly one state label and
    that it is `codex-ready` (not `codex-running` or `codex-blocked`). In EVENT
    MODE, remove `codex-event-active` only after this verification.
@@ -73,5 +87,8 @@ Post ONE comment on the PR containing: what fails, your diagnosis, what you trie
 ## Never
 
 - Never merge, never push to main.
+- Never run stack-wide mutation commands. Only numeric `gh stack link` is
+  permitted during initial PR creation; merging and cascading rebases are
+  human actions.
 - Never respond to CI runs triggered by your own just-pushed commit as if they were new external feedback — wait for the run to finish, act once.
 - Never disable, skip, or `continue-on-error` a CI check to get green.

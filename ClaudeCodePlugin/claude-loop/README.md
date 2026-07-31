@@ -61,4 +61,19 @@ One routine owns implementation and PR convergence through its subscription or
 blocking watch. When multiple CI providers are required, configure every exact
 context name in `EXPECTED_CI_CHECKS` inside checks.sh.
 
+## Optional stacked PRs
+
+Add `Stacks-on: #N` as a full line in a Claude issue when it may safely build
+on and merge with #N. The lower issue must have a `claude-ready`
+same-repository PR. The routine creates an ordinary child PR against that
+branch and links numeric PRs with GitHub's official `gh-stack` extension.
+Use `Depends-on:` when the lower change must land or deploy separately.
+
+Stack merges and cascading rebases remain human actions. After using GitHub's
+**Rebase Stack** action, the upper issue must reconverge against its changed
+head and base. Re-paste the updated optional sweep prompt so parked stack
+children and changed ready PRs are resumed automatically; without that sweep,
+relabel them manually from `claude-blocked` or `claude-ready` to
+`claude-build`.
+
 Design docs and version history: see the repo this plugin lives in.

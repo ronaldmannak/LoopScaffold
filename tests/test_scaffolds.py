@@ -474,6 +474,68 @@ class PolicyHookTests(unittest.TestCase):
             non_test = invoke_hook(hook, {"tool_input": {"command": "rm Sources/Contest.swift"}})
             self.assertEqual(0, non_test.returncode)
 
+    def test_bash_guards_constrain_gh_stack_to_inspection_and_numeric_linking(self) -> None:
+        blocked = {
+            "gh stack merge 42": "PR stack merge",
+            "gh --repo owner/repo stack merge 42": "PR stack merge",
+            "/tmp/gh-stack merge 42": "PR stack merge",
+            "gh stack push": "unsupported mutating gh-stack",
+            "gh stack rebase": "unsupported mutating gh-stack",
+            "gh stack sync --prune": "unsupported mutating gh-stack",
+            "gh stack submit --open": "unsupported mutating gh-stack",
+            "gh stack modify": "unsupported mutating gh-stack",
+            "gh stack unstack 7": "unsupported mutating gh-stack",
+            "gh stack alias gs": "unsupported mutating gh-stack",
+            "gh stack link parent-branch child-branch": "unsupported mutating gh-stack",
+            "gh stack link 12 13 14": "unsupported mutating gh-stack",
+            "gh stack link --base=develop 12 13": "unsupported mutating gh-stack",
+            "gh stack view --web": "unsupported gh-stack inspection flags",
+            "gh extension exec stack merge 42": "uninspectable GitHub extension",
+            "gh alias set land 'stack merge 42'": "persisted GitHub alias",
+            "gh alias delete land": "persisted GitHub alias",
+            "gh alias import aliases.yml": "persisted GitHub alias",
+        }
+        safe = (
+            "gh stack --help",
+            "gh stack view",
+            "gh stack view --json",
+            "gh stack link 12 13",
+            "/tmp/gh-stack link 12 13",
+            "gh alias list",
+        )
+        for product, hook in GUARD_HOOKS:
+            for command, reason in blocked.items():
+                with self.subTest(product=product, blocked=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn(reason, result.stderr)
+            for command in safe:
+                with self.subTest(product=product, safe=command):
+                    result = invoke_hook(hook, {"tool_input": {"command": command}})
+                    self.assertEqual(0, result.returncode)
+
+    def test_bash_guards_block_persisted_github_alias_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "gh"
+            binary.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1 $2\" == \"alias list\" ]]; then\n"
+                "  printf '%s\\n' 'land: stack merge 42'\n"
+                "fi\n"
+            )
+            binary.chmod(0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{directory}:{env['PATH']}"
+            for product, hook in GUARD_HOOKS:
+                with self.subTest(product=product):
+                    result = invoke_hook(
+                        hook,
+                        {"tool_input": {"command": "gh land"}},
+                        env=env,
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("GitHub alias command", result.stderr)
+
     def test_bash_guards_block_opaque_nested_shell_commands(self) -> None:
         blocked = (
             'bash -c "git push --force origin main"',
@@ -828,11 +890,11 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("issue_number:", trigger)
         self.assertIn("expected_label:", trigger)
         self.assertIn("actions: write", sweep)
-        self.assertEqual(6, sweep.count("gh workflow run codex-build-trigger.yml"))
-        self.assertEqual(6, sweep.count("-f expected_label="))
-        self.assertEqual(6, sweep.count("-f mode="))
-        self.assertEqual(6, sweep.count("-f reason="))
-        self.assertEqual(4, sweep.count("--limit 1000"))
+        self.assertEqual(7, sweep.count("gh workflow run codex-build-trigger.yml"))
+        self.assertEqual(7, sweep.count("-f expected_label="))
+        self.assertEqual(7, sweep.count("-f mode="))
+        self.assertEqual(7, sweep.count("-f reason="))
+        self.assertEqual(6, sweep.count("--limit 1000"))
         self.assertNotIn("--add-label codex-build", sweep)
 
     def test_codex_build_and_convergence_tasks_use_distinct_modes(self) -> None:
@@ -989,6 +1051,85 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("entire comment body exactly matches", claude)
         self.assertIn("most recent", claude)
         self.assertIn("claude-dependency-resumed #<x>", claude)
+
+    def test_stacked_prs_are_explicit_same_agent_opt_in(self) -> None:
+        plan_paths = (
+            "CodexPlugin/codex-loop/payload/skills/plan-to-issue/SKILL.md",
+            "ClaudeCodePlugin/claude-loop/payload/skills/plan-to-issue/SKILL.md",
+            "ClaudeCode-script/.claude/skills/plan-to-issue/SKILL.md",
+        )
+        for path in plan_paths:
+            with self.subTest(path=path):
+                plan = (ROOT / path).read_text()
+                self.assertIn("`Stacks-on: #<n>`", plan)
+                self.assertIn("Never add both directives", plan)
+                self.assertIn("deployment-ordered", plan)
+
+        claude_paths = (
+            "ClaudeCodePlugin/claude-loop/payload/skills/issue-to-pr/SKILL.md",
+            "ClaudeCode-script/.claude/skills/issue-to-pr/SKILL.md",
+        )
+        for path in claude_paths:
+            with self.subTest(path=path):
+                implementation = (ROOT / path).read_text()
+                self.assertIn("claude-stack-wait #<x>", implementation)
+                self.assertIn("only `claude-ready`", implementation)
+                self.assertIn("branch from the recorded parent remote head", implementation)
+                self.assertIn("gh stack link <parent-pr-number> <child-pr-number>", implementation)
+                self.assertIn("non-null `stack`", implementation)
+                self.assertIn("human **Rebase Stack**", implementation)
+
+        agents = (ROOT / "CodexPlugin/codex-loop/payload/AGENTS_LOOP.md").read_text()
+        self.assertIn("## Optional stacked PRs", agents)
+        self.assertIn("codex-stack-wait #N", agents)
+        self.assertIn("only `codex-ready`", agents)
+        self.assertIn("gh stack link <parent-pr> <child-pr>", agents)
+        self.assertIn("Both\n  arguments must be numeric PR numbers", agents)
+
+    def test_stack_children_unpark_and_changed_heads_reconverge(self) -> None:
+        build = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
+        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
+        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
+        claude_sweep = (ROOT / "ClaudeCodePlugin/claude-loop/payload/SWEEP_ROUTINE_PROMPT.md").read_text()
+
+        self.assertIn("build:stack-ready", build)
+        self.assertIn("event:head-updated", build)
+        self.assertIn("types: [synchronize]", converge)
+        self.assertIn("REASON=head-updated", converge)
+        self.assertIn("Unpark children whose stack parent is ready", sweep)
+        self.assertIn("codex-stack-wait #[0-9]+", sweep)
+        self.assertIn("codex-stack-resumed #$DEP", sweep)
+        self.assertIn('PARENT_MARKER_HEAD" = "$PARENT_SHA', sweep)
+        self.assertIn('PARENT_MARKER_BASE" = "$PARENT_BASE_SHA', sweep)
+        self.assertIn('"chatgpt-codex-connector[bot]"', sweep)
+        self.assertIn('and (.mergeable == "MERGEABLE")', sweep)
+        self.assertIn("-f mode=build -f reason=stack-ready", sweep)
+        self.assertIn("--json mergeable,body,headRefOid,baseRefOid", sweep)
+        self.assertIn("Stack readiness marker or parent changed", sweep)
+        self.assertIn('[ -z "$MARKER_BASE" ]', sweep)
+        self.assertIn("only when #<x> has exactly one Claude loop-state label", claude_sweep)
+        self.assertIn("claude-stack-resumed #<x>", claude_sweep)
+        self.assertIn("That PR's current head", claude_sweep)
+        self.assertIn("must match #<x>'s most recent authenticated exact", claude_sweep)
+        self.assertIn("direct-base SHA must match", claude_sweep)
+        self.assertIn("claude-ready-head <head-sha> base <base-sha>", claude_sweep)
+        self.assertIn("Never perform a stack-wide rebase yourself", claude_sweep)
+
+    def test_pr_iteration_is_base_aware_and_records_ready_heads(self) -> None:
+        paths = (
+            ("codex", "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md"),
+            ("claude-plugin", "ClaudeCodePlugin/claude-loop/payload/skills/pr-iteration/SKILL.md"),
+            ("claude-standalone", "ClaudeCode-script/.claude/skills/pr-iteration/SKILL.md"),
+        )
+        for product, path in paths:
+            with self.subTest(product=product):
+                iteration = (ROOT / path).read_text()
+                self.assertIn("`baseRefName`", iteration)
+                self.assertIn("`baseRefOid`", iteration)
+                self.assertIn("origin/$BASE_REF...HEAD", iteration)
+                self.assertNotIn("git log origin/main..HEAD", iteration)
+                self.assertIn("Ready at <head-sha> on base <base-sha>: <pr-url>", iteration)
+                self.assertIn("Only numeric `gh stack link`", iteration)
 
     def test_claude_dead_run_recovery_requires_stale_issue_activity(self) -> None:
         sweep = (ROOT / "ClaudeCodePlugin/claude-loop/payload/SWEEP_ROUTINE_PROMPT.md").read_text()

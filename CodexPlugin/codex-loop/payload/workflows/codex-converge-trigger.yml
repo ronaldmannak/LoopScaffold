@@ -6,6 +6,8 @@ on:
     types: [completed]
   pull_request_review:
     types: [submitted]
+  pull_request:
+    types: [synchronize]
   issue_comment:
     types: [created]
 concurrency:
@@ -18,6 +20,9 @@ jobs:
         && github.event.workflow_run.head_repository.full_name == github.repository
         && startsWith(github.event.workflow_run.head_branch, 'codex/'))
       || (github.event_name == 'pull_request_review'
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && startsWith(github.event.pull_request.head.ref, 'codex/'))
+      || (github.event_name == 'pull_request'
         && github.event.pull_request.head.repo.full_name == github.repository
         && startsWith(github.event.pull_request.head.ref, 'codex/'))
       || (github.event_name == 'issue_comment'
@@ -52,6 +57,8 @@ jobs:
             fi
             if [ "$EVENT_NAME" = workflow_run ]; then
               REASON=ci-completed
+            elif [ "$EVENT_NAME" = pull_request ]; then
+              REASON=head-updated
             else
               REASON=review-submitted
             fi

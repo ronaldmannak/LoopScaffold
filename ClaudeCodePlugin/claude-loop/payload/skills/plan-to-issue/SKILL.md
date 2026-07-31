@@ -27,9 +27,18 @@ The approved plan, step by step. Exact file paths where known.
 - [ ] All checks in .claude/scripts/checks.sh pass
 
 ## Dependencies
-If this plan requires another claude-build issue to merge first, add a line
-"Depends-on: #<n>" to the body — the routine parks dependent issues until
-the dependency merges, so you can safely file and label a whole batch at once.
+Choose at most one immediate dependency directive:
+- If this work must wait until another issue lands, is deployed, or is
+  observed independently, add `Depends-on: #<n>`. The routine parks it until a
+  merged PR closes that issue.
+- If this work can safely build on another Claude PR and both may be merged
+  together, add `Stacks-on: #<n>`. The routine starts after that issue has a
+  converged `claude-ready` PR, branches from its head, and links the PRs into a
+  native GitHub stack.
+
+Never add both directives, more than one of either directive, or `Stacks-on:`
+for cross-repository, cross-agent, deployment-ordered, or separately landed
+work. Independent work needs no dependency directive.
 
 ## Out of scope
 Explicit non-goals, so the implementer doesn't expand scope.
