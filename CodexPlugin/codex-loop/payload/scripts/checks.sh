@@ -65,24 +65,41 @@ fi
 TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
 [[ -z "$TIMEOUT_BIN" ]] && echo "note: no timeout binary found — steps run without a time limit" >&2
 PLATFORM_CHECK_TIMEOUT="${PLATFORM_CHECK_TIMEOUT:-60}"   # seconds for the platform gate
+PLATFORM_KILL_GRACE=10                                   # SIGKILL delay for a predicate that ignores SIGTERM
 
 # Platform gate: "this host cannot verify" is not the same answer as "the project
 # failed", and reporting it as a failure leaves a correct change with no way to
 # reach a terminal state. Exit 42 means UNVERIFIED — nothing was built, tested,
 # or linted. It is never a pass and never justifies merging; CI is the verifier.
 if [[ ${#PLATFORM_CAN_VERIFY[@]} -gt 0 ]]; then
+  if [[ ! "$PLATFORM_CHECK_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "checks.sh: PLATFORM_CHECK_TIMEOUT must be a positive whole number of seconds, got '$PLATFORM_CHECK_TIMEOUT'." >&2
+    exit 1
+  fi
   if ! command -v "${PLATFORM_CAN_VERIFY[0]}" >/dev/null 2>&1; then
     echo "checks.sh: PLATFORM_CAN_VERIFY is configured but '${PLATFORM_CAN_VERIFY[0]}' is not executable." >&2
     exit 1
   fi
-  platform_rc=0
+  # A predicate may legitimately exit with timeout's own reserved statuses, so the
+  # kill is identified by elapsed time rather than by status 124. --kill-after
+  # bounds a predicate that ignores SIGTERM; it is probed because not every
+  # timeout implementation accepts it.
+  platform_cmd=()
   if [[ -n "$TIMEOUT_BIN" ]]; then
-    "$TIMEOUT_BIN" "$PLATFORM_CHECK_TIMEOUT" "${PLATFORM_CAN_VERIFY[@]}" >/dev/null || platform_rc=$?
-  else
-    "${PLATFORM_CAN_VERIFY[@]}" >/dev/null || platform_rc=$?
+    platform_cmd=("$TIMEOUT_BIN")
+    "$TIMEOUT_BIN" -k 1 1 true >/dev/null 2>&1 && platform_cmd+=(-k "$PLATFORM_KILL_GRACE")
+    platform_cmd+=("$PLATFORM_CHECK_TIMEOUT")
   fi
-  if [[ $platform_rc -eq 124 && -n "$TIMEOUT_BIN" ]]; then
-    echo "checks.sh: PLATFORM_CAN_VERIFY timed out after ${PLATFORM_CHECK_TIMEOUT}s — fix the predicate; a hanging check is not a deferral." >&2
+  platform_cmd+=("${PLATFORM_CAN_VERIFY[@]}")
+  platform_rc=0
+  platform_start=$(date +%s)
+  "${platform_cmd[@]}" >/dev/null || platform_rc=$?
+  if [[ -n "$TIMEOUT_BIN" && $(( $(date +%s) - platform_start )) -ge $PLATFORM_CHECK_TIMEOUT ]]; then
+    echo "checks.sh: PLATFORM_CAN_VERIFY did not finish within ${PLATFORM_CHECK_TIMEOUT}s — fix the predicate; a hanging check is not a deferral." >&2
+    exit 1
+  fi
+  if [[ -n "$TIMEOUT_BIN" && $platform_rc -eq 125 ]]; then
+    echo "checks.sh: could not run PLATFORM_CAN_VERIFY under $TIMEOUT_BIN (exit 125)." >&2
     exit 1
   fi
   if [[ $platform_rc -ne 0 ]]; then

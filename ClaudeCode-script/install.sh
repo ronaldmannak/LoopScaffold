@@ -213,8 +213,14 @@ else
 fi
 
 echo "==> Sanity check"
-if .claude/scripts/checks.sh --quick >/dev/null 2>&1; then
+CHECKS_RC=0
+.claude/scripts/checks.sh --quick >/dev/null 2>&1 || CHECKS_RC=$?
+if [[ $CHECKS_RC -eq 0 ]]; then
   echo "    checks.sh --quick: PASS"
+elif [[ $CHECKS_RC -eq 42 ]]; then
+  echo "    checks.sh --quick: DEFERRED — this host cannot verify this project"
+  echo "    (PLATFORM_CAN_VERIFY reported the platform unusable). That is neither a"
+  echo "    pass nor a failure: the scaffold is installed, and CI is the verifier."
 else
   echo "    checks.sh --quick: FAILED or unconfigured"
   echo "    use the exact project-specific commands printed above, then rerun:"
@@ -228,7 +234,7 @@ cat << 'EOD'
      installer already ran `chmod +x .claude/scripts/*.sh`; rerun that exact
      command if executable bits are ever lost. Setup is incomplete until:
        bash .claude/scripts/checks.sh --quick
-     passes.
+     passes, or defers with exit 42 on a host that cannot verify this project.
   2. Review: git status --short -- .claude .swift-version .github/workflows/ci.yml
      Stage only the paths shown, then commit "Claude loop scaffold". Push after review.
   3. Routine (UI-only: config lives in your Anthropic account, no API):

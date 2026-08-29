@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -330,7 +332,7 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
 
     def test_hanging_platform_predicate_is_reported_as_a_timeout_not_a_deferral(self) -> None:
-        if not (Path("/usr/bin/timeout").exists() or Path("/bin/timeout").exists()):
+        if not shutil.which("timeout"):
             self.skipTest("no timeout binary on this host")
         for product, source in CHECKS_SCRIPTS:
             with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
@@ -343,7 +345,57 @@ class ChecksScriptTests(unittest.TestCase):
                     ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True, env=env
                 )
                 self.assertEqual(1, result.returncode)
-                self.assertIn("timed out", result.stderr)
+                self.assertIn("did not finish within", result.stderr)
+                self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
+
+    def test_predicate_that_ignores_sigterm_is_killed_within_the_grace_period(self) -> None:
+        if not shutil.which("timeout"):
+            self.skipTest("no timeout binary on this host")
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, 'bash -c \'trap "" TERM; sleep 120\'')
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "1"
+                started = time.monotonic()
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True,
+                    env=env, timeout=60,
+                )
+                elapsed = time.monotonic() - started
+                self.assertEqual(1, result.returncode)
+                # 1s timeout + 10s kill grace; well under the predicate's own 120s.
+                self.assertLess(elapsed, 40)
+
+    def test_predicate_exiting_with_timeouts_reserved_status_still_defers(self) -> None:
+        # timeout reports 124 for a kill, but a predicate may exit 124 on its own.
+        # Elapsed time, not the status, decides which happened.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "bash -c 'exit 124'")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertIn("VERIFICATION DEFERRED", result.stdout)
+                self.assertNotIn("did not finish within", result.stderr)
+
+    def test_invalid_platform_check_timeout_is_a_misconfiguration_not_a_deferral(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "false")
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "not-a-number"
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True, env=env
+                )
+                self.assertEqual(1, result.returncode)
+                self.assertIn("positive whole number", result.stderr)
                 self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
 
 
@@ -1324,6 +1376,34 @@ class InstallerTests(unittest.TestCase):
             self.assertIn('BUILD=(xcodebuild -project "PicoServer.xcodeproj"', result.stdout)
             self.assertIn("chmod +x .claude/scripts/*.sh", result.stdout)
             self.assertIn("bash .claude/scripts/checks.sh --quick", result.stdout)
+
+    def test_install_sanity_check_reports_a_deferral_separately_from_a_failure(self) -> None:
+        for rc, expected, unexpected in (
+            (42, "DEFERRED", "FAILED or unconfigured"),
+            (1, "FAILED or unconfigured", "DEFERRED"),
+        ):
+            with self.subTest(rc=rc), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory) / "repo"
+                repo.mkdir()
+                run("git", "init", "-q", repo)
+                # install.sh preserves an existing checks.sh, so this stands in for a
+                # project whose configured PLATFORM_CAN_VERIFY fails on this host.
+                checks = repo / ".claude/scripts/checks.sh"
+                checks.parent.mkdir(parents=True)
+                checks.write_text(f"#!/usr/bin/env bash\nexit {rc}\n")
+                checks.chmod(0o755)
+                binary = repo / "bin"
+                binary.mkdir()
+                gh = binary / "gh"
+                gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+                gh.chmod(0o755)
+                env = dict(os.environ)
+                env["PATH"] = f"{binary}:{env['PATH']}"
+                result = run(
+                    "/bin/bash", ROOT / "ClaudeCode-script/install.sh", repo, cwd=ROOT, env=env
+                )
+                self.assertIn(expected, result.stdout)
+                self.assertNotIn(unexpected, result.stdout)
 
     def test_install_is_idempotent_and_preserves_settings_and_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
