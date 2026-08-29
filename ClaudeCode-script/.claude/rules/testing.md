@@ -7,4 +7,5 @@
 - Every behavior change needs at least one test that fails before the change and passes after it.
 - Tests assert observable behavior, not implementation details (no asserting on private state or call counts unless that IS the behavior).
 - Never report work as complete based on a successful edit alone. Run `.claude/scripts/checks.sh` and include its actual output as evidence.
+- Exit 42 from `.claude/scripts/checks.sh` means this host cannot verify the project at all (its `PLATFORM_CAN_VERIFY` predicate failed) — nothing was built, tested, or linted. Report that work as UNVERIFIED, paste the deferral output, and name CI as the verifier. A 42 is never a pass, never "checks passed", and never grounds for merging.
 - If a test is flaky (passes on retry with no code change), say so explicitly in the PR rather than re-running until green.

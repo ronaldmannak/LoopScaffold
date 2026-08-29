@@ -8,5 +8,6 @@
   2. **What changed** — 3–6 bullets, plain language.
   3. **Evidence** — the actual commands run and their output (test results, build status). Paste output, don't assert success.
   4. **Not done on purpose** — anything in or near scope that was intentionally skipped, and why.
+- A PR may be opened on a `checks.sh` exit 42 (this host cannot verify), but the **Evidence** section must then say plainly that the script verified nothing on this host and that CI is the verifier. Never present a 42 as passing checks.
 - Circuit breaker: if the same CI check fails 3 consecutive times after your fixes, STOP. Comment your diagnosis and what you tried on the PR, and end the run. Do not keep pushing.
 - Never force-push over commits you did not create in the current run.
