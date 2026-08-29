@@ -1445,11 +1445,14 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("bash .claude/scripts/checks.sh --quick", result.stdout)
 
     def test_install_sanity_check_reports_a_deferral_separately_from_a_failure(self) -> None:
-        for rc, expected, unexpected in (
-            (42, "DEFERRED", "FAILED or unconfigured"),
-            (1, "FAILED or unconfigured", "DEFERRED"),
+        for rc, banner, expected, unexpected in (
+            (42, "VERIFICATION DEFERRED", "DEFERRED", "FAILED or unconfigured"),
+            (1, "", "FAILED or unconfigured", "DEFERRED"),
+            # A preserved script predating the contract may use 42 for an ordinary
+            # failure; without the banner it must stay a failure diagnosis.
+            (42, "", "FAILED or unconfigured", "DEFERRED"),
         ):
-            with self.subTest(rc=rc), tempfile.TemporaryDirectory() as directory:
+            with self.subTest(rc=rc, banner=bool(banner)), tempfile.TemporaryDirectory() as directory:
                 repo = Path(directory) / "repo"
                 repo.mkdir()
                 run("git", "init", "-q", repo)
@@ -1457,7 +1460,7 @@ class InstallerTests(unittest.TestCase):
                 # project whose configured PLATFORM_CAN_VERIFY fails on this host.
                 checks = repo / ".claude/scripts/checks.sh"
                 checks.parent.mkdir(parents=True)
-                checks.write_text(f"#!/usr/bin/env bash\nexit {rc}\n")
+                checks.write_text(f"#!/usr/bin/env bash\necho '{banner}'\nexit {rc}\n")
                 checks.chmod(0o755)
                 binary = repo / "bin"
                 binary.mkdir()

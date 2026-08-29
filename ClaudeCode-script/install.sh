@@ -214,10 +214,12 @@ fi
 
 echo "==> Sanity check"
 CHECKS_RC=0
-.claude/scripts/checks.sh --quick >/dev/null 2>&1 || CHECKS_RC=$?
+# A preserved per-repo checks.sh may predate the exit-42 contract, so a bare 42 is
+# not trusted as a deferral unless the script also prints the deferral banner.
+CHECKS_OUT="$(.claude/scripts/checks.sh --quick 2>/dev/null)" || CHECKS_RC=$?
 if [[ $CHECKS_RC -eq 0 ]]; then
   echo "    checks.sh --quick: PASS"
-elif [[ $CHECKS_RC -eq 42 ]]; then
+elif [[ $CHECKS_RC -eq 42 && "$CHECKS_OUT" == *"VERIFICATION DEFERRED"* ]]; then
   echo "    checks.sh --quick: DEFERRED — this host cannot verify this project"
   echo "    (PLATFORM_CAN_VERIFY reported the platform unusable). That is neither a"
   echo "    pass nor a failure: the scaffold is installed, and CI is the verifier."
