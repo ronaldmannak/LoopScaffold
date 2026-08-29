@@ -80,27 +80,36 @@ if [[ ${#PLATFORM_CAN_VERIFY[@]} -gt 0 ]]; then
     echo "checks.sh: PLATFORM_CAN_VERIFY is configured but '${PLATFORM_CAN_VERIFY[0]}' is not executable." >&2
     exit 1
   fi
-  # A predicate may legitimately exit with timeout's own reserved statuses, so the
-  # kill is identified by elapsed time rather than by status 124. --kill-after
-  # bounds a predicate that ignores SIGTERM; it is probed because not every
+  # timeout's own status cannot be told apart from a predicate that exits with 124
+  # or 125, and elapsed wall-clock time only rounds the same ambiguity. So the
+  # predicate reports its status out of band: a status was written means it
+  # answered, whatever the value; nothing written means it never got to answer.
+  # --kill-after bounds a predicate ignoring SIGTERM, probed because not every
   # timeout implementation accepts it.
-  platform_cmd=()
+  platform_rc=0
   if [[ -n "$TIMEOUT_BIN" ]]; then
+    platform_status="$(mktemp "${TMPDIR:-/tmp}/checks-platform.XXXXXX")"
     platform_cmd=("$TIMEOUT_BIN")
     "$TIMEOUT_BIN" -k 1 1 true >/dev/null 2>&1 && platform_cmd+=(-k "$PLATFORM_KILL_GRACE")
-    platform_cmd+=("$PLATFORM_CHECK_TIMEOUT")
-  fi
-  platform_cmd+=("${PLATFORM_CAN_VERIFY[@]}")
-  platform_rc=0
-  platform_start=$(date +%s)
-  "${platform_cmd[@]}" >/dev/null || platform_rc=$?
-  if [[ -n "$TIMEOUT_BIN" && $(( $(date +%s) - platform_start )) -ge $PLATFORM_CHECK_TIMEOUT ]]; then
-    echo "checks.sh: PLATFORM_CAN_VERIFY did not finish within ${PLATFORM_CHECK_TIMEOUT}s — fix the predicate; a hanging check is not a deferral." >&2
-    exit 1
-  fi
-  if [[ -n "$TIMEOUT_BIN" && $platform_rc -eq 125 ]]; then
-    echo "checks.sh: could not run PLATFORM_CAN_VERIFY under $TIMEOUT_BIN (exit 125)." >&2
-    exit 1
+    platform_cmd+=("$PLATFORM_CHECK_TIMEOUT" bash -c 'trap "" TERM; rc=0; "${@:2}" >/dev/null || rc=$?; printf %s "$rc" >"$1"' \
+      bash "$platform_status" "${PLATFORM_CAN_VERIFY[@]}")
+    # Backgrounded and waited so the shell does not print a job-control "Killed"
+    # line when --kill-after fires; the predicate's own stderr still comes through.
+    "${platform_cmd[@]}" &
+    wait $! 2>/dev/null
+    platform_reported="$(cat "$platform_status" 2>/dev/null || true)"
+    rm -f "$platform_status"
+    # No status, or one that is itself a termination signal, means the predicate
+    # was stopped rather than answering. The wrapper ignores TERM so that a
+    # predicate ignoring it too still reaches --kill-after's SIGKILL, which
+    # nothing can absorb: no orphan survives the gate.
+    if [[ -z "$platform_reported" || "$platform_reported" == 143 || "$platform_reported" == 137 ]]; then
+      echo "checks.sh: PLATFORM_CAN_VERIFY did not report a status within ${PLATFORM_CHECK_TIMEOUT}s — fix the predicate; a check that cannot answer is not a deferral." >&2
+      exit 1
+    fi
+    platform_rc=$platform_reported
+  else
+    "${PLATFORM_CAN_VERIFY[@]}" >/dev/null || platform_rc=$?
   fi
   if [[ $platform_rc -ne 0 ]]; then
     echo "VERIFICATION DEFERRED: this host cannot verify this project (PLATFORM_CAN_VERIFY exit $platform_rc)."

@@ -345,7 +345,7 @@ class ChecksScriptTests(unittest.TestCase):
                     ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True, env=env
                 )
                 self.assertEqual(1, result.returncode)
-                self.assertIn("did not finish within", result.stderr)
+                self.assertIn("did not report a status", result.stderr)
                 self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
 
     def test_predicate_that_ignores_sigterm_is_killed_within_the_grace_period(self) -> None:
@@ -366,6 +366,8 @@ class ChecksScriptTests(unittest.TestCase):
                 elapsed = time.monotonic() - started
                 self.assertEqual(1, result.returncode)
                 # 1s timeout + 10s kill grace; well under the predicate's own 120s.
+                # capture_output also makes this fail if the predicate survives as
+                # an orphan holding the inherited pipes open.
                 self.assertLess(elapsed, 40)
 
     def test_predicate_exiting_with_timeouts_reserved_status_still_defers(self) -> None:
@@ -382,6 +384,38 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertEqual(42, result.returncode)
                 self.assertIn("VERIFICATION DEFERRED", result.stdout)
                 self.assertNotIn("did not finish within", result.stderr)
+
+    def test_predicate_exiting_with_timeouts_wrapper_failure_status_still_defers(self) -> None:
+        # `timeout` returns 125 for its own failure, but a predicate may exit 125
+        # too. The predicate's reported status decides, so this is a deferral.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "bash -c 'exit 125'")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertIn("VERIFICATION DEFERRED", result.stdout)
+
+    def test_fast_predicate_defers_regardless_of_wall_clock_boundaries(self) -> None:
+        # A whole-second elapsed measurement rounded a 0.2s predicate up to a full
+        # 1s budget when it straddled a clock boundary, reporting a false hang.
+        # Repeated so a boundary is crossed; the fix removes timing from the path.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "bash -c 'sleep 0.2; exit 7'")
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "1"
+                for attempt in range(10):
+                    result = subprocess.run(
+                        ["/bin/bash", str(script)], cwd=repo, text=True,
+                        capture_output=True, env=env,
+                    )
+                    self.assertEqual(42, result.returncode, f"attempt {attempt}: {result.stderr}")
 
     def test_invalid_platform_check_timeout_is_a_misconfiguration_not_a_deferral(self) -> None:
         for product, source in CHECKS_SCRIPTS:
