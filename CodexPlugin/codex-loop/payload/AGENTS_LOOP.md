@@ -24,6 +24,7 @@
   2. **What changed** — 3–6 bullets, plain language.
   3. **Evidence** — the actual commands run and their output (test results, build status). Paste output, don't assert success.
   4. **Not done on purpose** — anything in or near scope that was intentionally skipped, and why.
+- A PR may be opened on a `checks.sh` exit 42 (this host cannot verify), but the **Evidence** section must then say plainly that the script verified nothing on this host and that CI is the verifier. Never present a 42 as passing checks.
 - Circuit breaker: if the same CI check fails 3 consecutive times after your fixes, STOP pushing. Comment your diagnosis and attempts on both the PR and linked issue, replace codex-running with codex-blocked, verify the issue's terminal label, and only then end the run.
 - Never force-push over commits you did not create in the current run.
 
@@ -48,6 +49,7 @@ These rules apply to ALL code written in this repository, by any session, subage
 - Every behavior change needs at least one test that fails before the change and passes after it.
 - Tests assert observable behavior, not implementation details (no asserting on private state or call counts unless that IS the behavior).
 - Never report work as complete based on a successful edit alone. Run `.codex/scripts/checks.sh` and include its actual output as evidence.
+- Exit 42 from `.codex/scripts/checks.sh` means this host cannot verify the project at all (its `PLATFORM_CAN_VERIFY` predicate failed) — nothing was built, tested, or linted. Report that work as UNVERIFIED, paste the deferral output, and name CI as the verifier. A 42 is never a pass, never "checks passed", and never grounds for merging.
 - If a test is flaky (passes on retry with no code change), say so explicitly in the PR rather than re-running until green.
 
 ## Loop conventions

@@ -22,6 +22,21 @@ GUARD_HOOKS = (
     ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/guard-bash.sh"),
     ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/guard-bash.sh"),
 )
+CHECKS_SCRIPTS = (
+    ("claude-standalone", ROOT / "ClaudeCode-script/.claude/scripts/checks.sh"),
+    ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/checks.sh"),
+    ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/checks.sh"),
+)
+
+
+def checks_script_with(source: Path, repo: Path, predicate: str) -> Path:
+    """Copy checks.sh into repo with PLATFORM_CAN_VERIFY set to predicate."""
+    script = repo / "checks.sh"
+    text = source.read_text()
+    replaced = text.replace("PLATFORM_CAN_VERIFY=()", f"PLATFORM_CAN_VERIFY=({predicate})", 1)
+    assert replaced != text, "PLATFORM_CAN_VERIFY declaration missing from checks.sh"
+    script.write_text(replaced)
+    return script
 
 
 def run(*arguments: str | Path, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -233,6 +248,104 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertIn("test: PASS", full.stdout)
                 self.assertIn("build: SKIPPED", quick.stdout)
                 self.assertIn("test: PASS", quick.stdout)
+
+    def test_unset_platform_predicate_is_the_default(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product):
+                self.assertIn("PLATFORM_CAN_VERIFY=()", source.read_text())
+
+    def test_platform_predicate_failure_defers_with_exit_42_and_runs_nothing(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                # A project that would otherwise build, so a 42 can only come from the gate.
+                (repo / "Package.swift").write_text("// local package\n")
+                script = checks_script_with(source, repo, "false")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertIn("VERIFICATION DEFERRED", result.stdout)
+                self.assertIn("NOT a pass", result.stdout)
+                self.assertNotIn("VERIFICATION COMPLETE", result.stdout)
+                self.assertFalse((repo / ".claude/.checks").exists())
+                self.assertFalse((repo / ".codex/.checks").exists())
+
+    def test_platform_predicate_defers_before_project_autodetection(self) -> None:
+        # An Xcode container exits 1 during autodetection; the gate must win, so a
+        # host that cannot verify is never reported as a project misconfiguration.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                (repo / "App.xcodeproj").mkdir()
+                script = checks_script_with(source, repo, "false")
+                result = subprocess.run(
+                    ["/bin/bash", str(script), "--quick"], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertNotIn("Xcode project detected", result.stderr)
+
+    def test_satisfied_platform_predicate_runs_the_configured_checks(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "true")
+                script.write_text(script.read_text().replace(
+                    "BUILD=(); TEST=(); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()",
+                    "BUILD=(); TEST=(true); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()",
+                    1,
+                ))
+                result = run("/bin/bash", script, cwd=repo)
+                self.assertIn("VERIFICATION COMPLETE", result.stdout)
+                self.assertIn("test: PASS", result.stdout)
+
+    def test_ci_check_listing_still_works_on_a_host_that_cannot_verify(self) -> None:
+        # pr-iteration reads the required CI context names from any host, including
+        # one that cannot build the project.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "false")
+                script.write_text(script.read_text().replace(
+                    "EXPECTED_CI_CHECKS=()", 'EXPECTED_CI_CHECKS=("CI / verify")', 1
+                ))
+                result = run("/bin/bash", script, "--list-ci-checks", cwd=repo)
+                self.assertEqual(["CI / verify"], result.stdout.splitlines())
+
+    def test_unexecutable_platform_predicate_is_a_misconfiguration_not_a_deferral(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "checks-sh-no-such-command")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(1, result.returncode)
+                self.assertIn("not executable", result.stderr)
+                self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
+
+    def test_hanging_platform_predicate_is_reported_as_a_timeout_not_a_deferral(self) -> None:
+        if not (Path("/usr/bin/timeout").exists() or Path("/bin/timeout").exists()):
+            self.skipTest("no timeout binary on this host")
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "sleep 30")
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "1"
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True, env=env
+                )
+                self.assertEqual(1, result.returncode)
+                self.assertIn("timed out", result.stderr)
+                self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
+
 
 class PolicyHookTests(unittest.TestCase):
     def test_protect_hooks_fail_closed_on_malformed_input(self) -> None:

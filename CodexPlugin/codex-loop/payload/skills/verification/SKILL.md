@@ -12,6 +12,7 @@ Core rule: **show evidence, don't assert success.** "Tests pass" is a claim; pas
 1. Run `.codex/scripts/checks.sh --clean` for pre-PR evidence (tool-native clean, then build/test/lint — incremental build state can mask failures). Plain `checks.sh` is fine for mid-iteration checks.
 2. Paste the tail of its output (result lines, counts, timing) wherever you report completion — chat, PR description, or issue comment.
 3. If any step was skipped (e.g., no simulator available in this environment), say so explicitly instead of implying full verification.
+4. Exit 42 means the host itself cannot verify this project — `PLATFORM_CAN_VERIFY` failed and no step ran. That is not a pass and not a project failure: report the work as UNVERIFIED, paste the deferral lines as the evidence of what happened, and state that CI is the verifier. Never summarize a 42 as "checks passed".
 
 ## UI changes (apps, views, components)
 
