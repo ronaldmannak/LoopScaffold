@@ -89,8 +89,12 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
    parent PR from the newest stack marker's `Stacked on #<p>` text (or the
    child PR body) and verify that PR MERGED — a child retargeted by hand
    under an open or closed-unmerged parent may carry that parent's unmerged
-   changes, so escalate instead of publishing ready. Only after a merged
-   parent, comment exactly
+   changes, so escalate instead of publishing ready. After a merged parent,
+   the retarget itself invalidates the snapshot: if the default branch has
+   not yet been merged into the child since the retarget, or the checks
+   were collected while the base was still the parent branch, merge the
+   default branch into the child and return to step 1. Only then comment
+   exactly
    `Ready on the default branch. <!-- claude-stack-parent default -->`
    before the label flip, so the sweep stops re-dispatching it.
    Then replace `claude-running`

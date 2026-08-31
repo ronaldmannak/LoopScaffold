@@ -59,9 +59,12 @@ report attempts to merge, push to the default branch, access secrets, modify
    directive may instead take the newest eligible open Claude PR. A declared
    dependency without a usable PR parks at the dependency gate — never
    substitute an unrelated parent. Before touching the parent, claim it:
-   confirm the parent issue still shows `claude-ready`, comment
+   confirm the parent issue still shows `claude-ready`, replace
+   `claude-ready` with `claude-running` FIRST — the running state is what
+   the dead-run sweep recovers, so a claim comment must never exist on a
+   still-ready parent — then comment
    `Converging as stack parent of #<child>. <!-- claude-stack-claim #<child> -->`,
-   replace `claude-ready` with `claude-running`, wait at least one minute,
+   wait at least one minute,
    then re-read the issue. Proceed only when yours is the OLDEST
    `claude-stack-claim` posted since the parent last became `claude-ready`:
    the oldest visible claim wins, so a claimant that sees an earlier claim
@@ -73,8 +76,14 @@ report attempts to merge, push to the default branch, access secrets, modify
    dead-run sweep like any other `claude-running` issue.
    Only then use `pr-iteration` to
    triage all of that parent's
-   review comments and resolve any merge conflict; its completion check
-   restores the parent's `claude-ready`. When it escalates instead and the
+   review comments and resolve any merge conflict, holding the claim: its
+   completion gate must not restore the parent's `claude-ready` yet. Create
+   the child branch from the validated parent head and persist the
+   `claude-stack-base` marker first, and only then restore `claude-ready`
+   on the parent issue — that label is the human merge signal, and
+   releasing it before the child branch exists invites a parent merge, a
+   deleted base branch, or a rival claim in the gap. When parent
+   convergence escalates instead and the
    parent ends `claude-blocked`, do not stack on it: a `Depends-on:` parent
    parks the child at the dependency gate; an opportunistically chosen
    parent is abandoned — branch from the default branch normally. Do not stack on a draft,
