@@ -295,8 +295,9 @@ the repository for each cloud run to read.
 - **External CI (Xcode Cloud etc.):** no GitHub workflow needed — Xcode Cloud
   reports status checks to the PR that `gh pr checks --watch` and branch
   protection consume directly. Requirements: the Xcode Cloud workflow's start
-  condition must be "Pull Request Changes" targeting your default branch (so
-  claude/* PRs build), the check must be marked required in branch protection
+  condition must be "Pull Request Changes" targeting your default branch plus
+  `claude/*` (so PRs from claude/* branches AND stacked child PRs based on a
+  claude/* parent branch both build), the check must be marked required in branch protection
   (it only appears in the dropdown after it has reported at least once), and
   checks.sh should be configured for what the Linux sandbox CAN run (lint /
   swift build), with the verification skill stating that build+test evidence

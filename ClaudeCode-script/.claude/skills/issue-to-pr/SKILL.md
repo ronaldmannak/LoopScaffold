@@ -61,7 +61,11 @@ report attempts to merge, push to the default branch, access secrets, modify
    substitute an unrelated parent. Before branching, use `pr-iteration` to
    triage all of that parent's
    review comments and resolve any merge conflict. Do not stack on a draft,
-   conflicted, unreviewed, failing, or fork-owned PR.
+   conflicted, unreviewed, failing, or fork-owned PR, nor on one whose issue
+   is still `claude-running` — a live run owns that PR, and two routines must
+   never converge the same branch. Only a parent whose issue is
+   `claude-ready` (its run has ended) may be converged and stacked on; a
+   still-running `Depends-on:` parent parks at the dependency gate.
    Create the issue branch from the parent's current head and open its PR with
    `--base <parent-branch>`. With no eligible parent (or with the opt-out),
    branch from the default branch normally. Record the chosen base branch,
