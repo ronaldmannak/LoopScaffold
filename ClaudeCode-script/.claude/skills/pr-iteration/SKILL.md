@@ -81,7 +81,13 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
    on the issue, where `<sha>` is the `baseRefOid` just validated — the
    scheduled sweep compares it against the parent's current head, and the
    marker must exist before the label flips so an overlapping sweep never
-   sees a ready child without one. Then replace `claude-running`
+   sees a ready child without one. For a PR whose base IS the default branch
+   but whose issue carries an authenticated stack marker (a child GitHub
+   retargeted after its parent merged and its branch was deleted), instead
+   comment exactly
+   `Ready on the default branch. <!-- claude-stack-parent default -->`
+   before the label flip, so the sweep stops re-dispatching it.
+   Then replace `claude-running`
    with `claude-ready`, and verify the issue has exactly one state label and
    that it is `claude-ready` (not `claude-running` or `claude-blocked`).
 

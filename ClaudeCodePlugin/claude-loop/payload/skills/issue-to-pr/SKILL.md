@@ -70,19 +70,23 @@ report attempts to merge, push to the default branch, access secrets, modify
    `--base <parent-branch>`. With no eligible parent (or with the opt-out),
    branch from the default branch normally. Record the chosen base branch,
    parent PR number, and parent head SHA before editing so every diff, review,
-   and the pre-ready base check use the actual base. When resuming an existing
-   stacked child, never baseline the parent's current head on faith: use the
-   newest authenticated `claude-stack-parent` marker when one exists, and
-   either way, if the parent branch's current head is not already an ancestor
+   and the pre-ready base check use the actual base. Persist that head the
+   moment the child branch is created by commenting exactly
+   `Stacked on #<parent-pr> at <sha>. <!-- claude-stack-base <sha> -->`
+   on the issue, so the integrated parent head survives a run that dies
+   before reaching ready. When resuming an existing
+   stacked child, never baseline the parent's current head on faith: read
+   the newest authenticated `claude-stack-parent` or `claude-stack-base`
+   marker, and if the parent branch's current head is not already an ancestor
    of the child branch, fold it in first — but only for a normal advance,
-   where the parent head previously integrated into the child (the marker
-   SHA, or with no marker the merge base of the child and parent branches)
-   is an ancestor of the parent's current head. Merge that advance into the
-   child before recording the new head as the baseline. A missing marker is
-   normal for a run that died before reaching ready. A parent whose current
-   head does not descend from the integrated head was rewritten (rebased or
-   force-pushed): never merge it — the merge would resurrect the commits the
-   rewrite dropped — escalate for a human decision instead.
+   where the marker SHA is an ancestor of the parent's current head. Merge
+   that advance into the child before recording the new head as the
+   baseline. A parent whose current head does not descend from the marker
+   SHA was rewritten (rebased or force-pushed): never merge it — the merge
+   would resurrect the commits the rewrite dropped — escalate for a human
+   decision instead. With no marker at all, treat a non-ancestor parent head
+   the same way: never infer the integrated head from the merge base of the
+   branches (a rewritten parent always passes that test); escalate.
 2. Implement the issue's accepted plan with the smallest design that meets its
    acceptance criteria. Follow the simplicity and testing rules.
 3. Run `.claude/scripts/checks.sh`. Paste its summary lines into the PR as
