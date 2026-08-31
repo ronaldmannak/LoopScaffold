@@ -28,10 +28,13 @@ with no eligible parent the routine branches from the default branch normally.
 
 Add the exact line `Stacking: disabled` to an issue to opt out and branch from
 the default branch; the opt-out also keeps a `Depends-on:` issue parked until
-its PR merges instead of stacking on it. After a parent merges, the routine
-merges the default branch into the child (pushed history is never rewritten),
-retargets its PR to the default branch, and reconverges checks and reviews.
-Merging stays a human action.
+its PR merges instead of stacking on it. After a parent merges, the child is
+sent back for reconvergence — the plugin's scheduled sweeper relabels its
+issue `claude-build`; this standalone distribution has no sweeper, so relabel
+the child's issue manually — and the resumed run merges the default branch
+into the child (pushed history is never rewritten), retargets its PR to the
+default branch, and reconverges checks and reviews. Merging stays a human
+action.
 
 ## Install the scaffold
 

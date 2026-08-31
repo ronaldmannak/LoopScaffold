@@ -58,8 +58,15 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 
 1. Re-read the head SHA: `gh pr view <pr> --json headRefOid --jq .headRefOid`.
 2. If it differs from the $HEAD_SHA your status snapshot used, discard the snapshot and return to step 1 — green checks for a stale commit prove nothing.
-3. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
-4. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
+3. For a stacked child (PR base is not the default branch), re-read
+   `gh pr view <pr> --json baseRefName,baseRefOid`. If the parent PR heading
+   that base branch has merged, merge the default branch into the child,
+   retarget the PR's base to the default branch, and return to step 1. If
+   `baseRefOid` no longer matches the recorded parent head the evidence was
+   collected against, merge the parent's new head into the branch and return
+   to step 1 — checks and reviews for the old merge result prove nothing.
+4. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
+5. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
    with `claude-ready`, then verify the issue has exactly one state label and
    that it is `claude-ready` (not `claude-running` or `claude-blocked`).
 

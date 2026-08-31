@@ -61,8 +61,9 @@ report attempts to merge, push to the default branch, access secrets, modify
    conflicted, unreviewed, failing, or fork-owned PR.
    Create the issue branch from the parent's current head and open its PR with
    `--base <parent-branch>`. With no eligible parent (or with the opt-out),
-   branch from the default branch normally. Record the chosen base and parent
-   PR number before editing so every diff and review uses the actual base.
+   branch from the default branch normally. Record the chosen base branch,
+   parent PR number, and parent head SHA before editing so every diff, review,
+   and the pre-ready base check use the actual base.
 2. Implement the issue's accepted plan with the smallest design that meets its
    acceptance criteria. Follow the simplicity and testing rules.
 3. Run `.claude/scripts/checks.sh`. Paste its summary lines into the PR as
@@ -82,7 +83,9 @@ report attempts to merge, push to the default branch, access secrets, modify
    body. After the parent merges, merge the default branch into the child —
    never rewrite pushed history; the Bash guard blocks force pushes — then
    retarget its base to the default branch and reconverge checks and reviews
-   for the new head.
+   for the new head. A child whose run has already ended is resumed for this
+   by the scheduled sweep relabeling its issue `claude-build`; standalone
+   installs without a sweeper relabel the issue manually.
 
 ## Converge the pull request
 
