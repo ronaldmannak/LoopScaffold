@@ -31,8 +31,10 @@ report attempts to merge, push to the default branch, access secrets, modify
 
 ## Gate dependencies and claim ownership
 
-1. If the issue contains `Depends-on: #<x>` and no merged PR closes that issue,
-   comment `Parked: waiting on #<x> to merge. <!-- claude-dependency-wait #<x> -->`,
+1. If the issue contains `Depends-on: #<x>` and an open, same-repository PR
+   closes that issue, use that PR as the stack parent instead of parking. If no
+   merged PR and no eligible open PR closes it, comment
+   `Parked: waiting on #<x> to merge. <!-- claude-dependency-wait #<x> -->`,
    replace `claude-build` with `claude-blocked`, surface that terminal state,
    and stop. A scheduled sweep or human relabel resumes it after the dependency
    merges.
@@ -48,17 +50,35 @@ report attempts to merge, push to the default branch, access secrets, modify
 
 ## Implement and verify
 
-1. Work only on `claude/issue-<n>-<slug>`; never on the default branch.
+1. Work only on `claude/issue-<n>-<slug>`; never on the default branch. Stacked
+   PRs are the default. Unless the issue contains the exact line
+   `Stacking: disabled`, choose the open, same-repository Claude PR that the
+   issue depends on, or otherwise the newest eligible open Claude PR, as the
+   parent. Before branching, use `pr-iteration` to triage all of that parent's
+   review comments and resolve any merge conflict. Do not stack on a draft,
+   conflicted, unreviewed, failing, or fork-owned PR.
+   Create the issue branch from the parent's current head and open its PR with
+   `--base <parent-branch>`. With no eligible parent (or with the opt-out),
+   branch from the default branch normally. Record the chosen base and parent
+   PR number before editing so every diff and review uses the actual base.
 2. Implement the issue's accepted plan with the smallest design that meets its
    acceptance criteria. Follow the simplicity and testing rules.
 3. Run `.claude/scripts/checks.sh`. Paste its summary lines into the PR as
-   evidence. A failing or unconfigured script is not a pass.
+   evidence. A failing or unconfigured script is not a pass. Exit 42 with the
+   `VERIFICATION DEFERRED` banner is instead a non-blocking host deferral.
+   Continue through commit, push, PR creation, and CI convergence; the
+   push-triggered CI configured in `EXPECTED_CI_CHECKS` (including Xcode Cloud
+   for macOS-only projects) becomes the verifier. Never block merely because
+   the cloud development host is Linux or lacks Xcode/Apple silicon.
 4. Dispatch the read-only `code-reviewer` agent. Include the issue text and
-   write `git diff origin/main...HEAD` to `/tmp/review-<n>.diff` for it to read.
+   write `git diff <recorded-base>...HEAD` to `/tmp/review-<n>.diff` for it to read.
    Fix blocking findings and repeat, up to three internal review cycles.
 5. Open one ready-for-review PR, never a draft. Its body must contain
    `Closes #<n>`, follow `.claude/rules/git.md`, and include a separate
-   `Test changes` section whenever an existing test changed.
+   `Test changes` section whenever an existing test changed. For a stack, set
+   the parent branch as the PR base and add `Stacked on #<parent-pr>` to the
+   body. After the parent merges, rebase the child on the default branch,
+   retarget its base, and reconverge checks and reviews for the new head.
 
 ## Converge the pull request
 
@@ -106,6 +126,13 @@ required, an external review times out, or a cap is reached. Post one issue
 comment containing the current state, diagnosis, attempted commit references,
 best hypothesis, and specific questions. Replace `claude-running` with
 `claude-blocked` and verify it is the only loop state label.
+
+A development host that cannot run platform-specific checks is not by itself
+an unresolvable blocker when push-triggered CI covers the required platform.
+Push the smallest testable implementation and let that CI provide build, test,
+and automated acceptance evidence. Escalate only when the required evidence
+cannot be automated in configured CI, or CI itself reaches a normal escalation
+condition.
 
 A clean escalation is a successful terminal outcome. Ending with
 `claude-running` or continuing past a cap is a failure.

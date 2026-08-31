@@ -16,6 +16,21 @@ Do not use the standalone script and Claude plugin in the same target
 repository. They manage the same `.claude/` files; choose one method and use it
 for subsequent updates.
 
+## Stacked PRs
+
+Stacked PRs are the default. The routine branches each new issue from the open
+PR of its `Depends-on:` issue when one exists, or otherwise from the newest
+eligible open same-repository Claude PR, after triaging that parent's review
+comments and resolving any merge conflict. The child PR uses the parent branch
+as its base and records `Stacked on #<parent-pr>` in its body. A draft,
+fork-owned, failing, unreviewed, or conflicted PR is never used as a parent;
+with no eligible parent the routine branches from the default branch normally.
+
+Add the exact line `Stacking: disabled` to an issue to opt out and branch from
+the default branch. After a parent merges, the routine rebases the child onto
+the default branch, retargets its PR, and reconverges checks and reviews.
+Merging stays a human action.
+
 ## Install the scaffold
 
 Prerequisites are Git, Bash, Python 3, and a target GitHub repository. Install
@@ -228,7 +243,7 @@ configured manually in your Anthropic account, while the skill is committed in
 the repository for each cloud run to read.
 
 ```text
-/goal Process the GitHub issue that triggered this routine by reading and following `.claude/skills/issue-to-pr/SKILL.md`. Keep working until the transcript proves exactly one terminal state for that issue. READY means: the issue has only the `claude-ready` loop-state label; a `claude/issue-<n>-*` branch and ready-for-review PR containing `Closes #<n>` implement the accepted plan; `.claude/scripts/checks.sh` evidence and an internal code-reviewer PASS are visible; every required CI check is green for the PR's current head SHA; every review comment is triaged; a submitted external review or Codex-bot 👍 completes the external-review gate; and a next-up suggestion was posted when the backlog was nonempty. BLOCKED means: the issue has only the `claude-blocked` loop-state label and one escalation comment records the diagnosis, attempts with commit references, best hypothesis, and specific questions. Hitting a cap, an ambiguous requirement, a policy-only change, an external-review timeout, or another unresolvable blocker must end BLOCKED and satisfies this goal. Never end with `claude-running`, exceed three internal review cycles, eight CI iterations, twenty commits, or one escalation comment. Never merge, push to the default branch, modify loop policy files, or delete, skip, or weaken tests. Before each turn ends, surface the issue number, state label, branch, PR, current head SHA, checks and review evidence, or blocking evidence so the evaluator can judge this condition.
+/goal Process the GitHub issue that triggered this routine by reading and following `.claude/skills/issue-to-pr/SKILL.md`. Default to an eligible stacked PR unless the issue says `Stacking: disabled`; converge the parent before creating the child. A banner-qualified checks.sh exit 42 is a non-blocking host deferral: continue through push and use configured push-triggered CI, including Xcode Cloud, as the verifier. Keep working until the transcript proves exactly one terminal state for that issue. READY means: the issue has only the `claude-ready` loop-state label; a `claude/issue-<n>-*` branch and ready-for-review PR containing `Closes #<n>` implement the accepted plan; `.claude/scripts/checks.sh` evidence and an internal code-reviewer PASS are visible; every required CI check is green for the PR's current head SHA; every review comment is triaged; a submitted external review or Codex-bot 👍 completes the external-review gate; and a next-up suggestion was posted when the backlog was nonempty. BLOCKED means: the issue has only the `claude-blocked` loop-state label and one escalation comment records the diagnosis, attempts with commit references, best hypothesis, and specific questions. Hitting a cap, an ambiguous requirement, a policy-only change, an external-review timeout, or another unresolvable blocker must end BLOCKED and satisfies this goal. Never end with `claude-running`, exceed three internal review cycles, eight CI iterations, twenty commits, or one escalation comment. Never merge, push to the default branch, modify loop policy files, or delete, skip, or weaken tests. Before each turn ends, surface the issue number, state label, branch, PR, current head SHA, checks and review evidence, or blocking evidence so the evaluator can judge this condition.
 ```
 
 ## The human's two touchpoints
