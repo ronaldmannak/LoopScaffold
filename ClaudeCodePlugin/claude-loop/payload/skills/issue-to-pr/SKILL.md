@@ -55,8 +55,11 @@ report attempts to merge, push to the default branch, access secrets, modify
 1. Work only on `claude/issue-<n>-<slug>`; never on the default branch. Stacked
    PRs are the default. Unless the issue contains the exact line
    `Stacking: disabled`, choose the open, same-repository Claude PR that the
-   issue depends on, or otherwise the newest eligible open Claude PR, as the
-   parent. Before branching, use `pr-iteration` to triage all of that parent's
+   issue depends on as the parent; only an issue with no `Depends-on:`
+   directive may instead take the newest eligible open Claude PR. A declared
+   dependency without a usable PR parks at the dependency gate — never
+   substitute an unrelated parent. Before branching, use `pr-iteration` to
+   triage all of that parent's
    review comments and resolve any merge conflict. Do not stack on a draft,
    conflicted, unreviewed, failing, or fork-owned PR.
    Create the issue branch from the parent's current head and open its PR with
@@ -64,11 +67,12 @@ report attempts to merge, push to the default branch, access secrets, modify
    branch from the default branch normally. Record the chosen base branch,
    parent PR number, and parent head SHA before editing so every diff, review,
    and the pre-ready base check use the actual base. When resuming an existing
-   stacked child, never baseline the parent's current head on faith: recover
-   the last validated SHA from the newest authenticated `claude-stack-parent`
-   marker, and if the parent branch's current head is not already an ancestor
+   stacked child, never baseline the parent's current head on faith: use the
+   newest authenticated `claude-stack-parent` marker when one exists, and
+   either way, if the parent branch's current head is not already an ancestor
    of the child branch, merge it into the child before recording it as the
-   baseline.
+   baseline. A missing marker is normal for a run that died before reaching
+   ready — the ancestor check alone establishes the baseline.
 2. Implement the issue's accepted plan with the smallest design that meets its
    acceptance criteria. Follow the simplicity and testing rules.
 3. Run `.claude/scripts/checks.sh`. Paste its summary lines into the PR as
