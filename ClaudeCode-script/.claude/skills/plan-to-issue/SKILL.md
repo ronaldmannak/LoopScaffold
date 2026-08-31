@@ -24,7 +24,9 @@ The approved plan, step by step. Exact file paths where known.
 ## Acceptance criteria
 - [ ] Deterministic, checkable criteria only (tests that must pass,
       observable behaviors, commands whose output must contain X)
-- [ ] All checks in .claude/scripts/checks.sh pass
+- [ ] All checks in .claude/scripts/checks.sh pass (a banner-qualified
+      exit 42 host deferral satisfies this once the configured platform CI
+      passes on the PR's current head)
 
 ## Dependencies
 If this plan builds on another claude-build issue, add a line

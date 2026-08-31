@@ -74,7 +74,10 @@ report attempts to merge, push to the default branch, access secrets, modify
    Only then use `pr-iteration` to
    triage all of that parent's
    review comments and resolve any merge conflict; its completion check
-   restores the parent's `claude-ready`. Do not stack on a draft,
+   restores the parent's `claude-ready`. When it escalates instead and the
+   parent ends `claude-blocked`, do not stack on it: a `Depends-on:` parent
+   parks the child at the dependency gate; an opportunistically chosen
+   parent is abandoned — branch from the default branch normally. Do not stack on a draft,
    conflicted, unreviewed, failing, or fork-owned PR, nor on one whose issue
    is still `claude-running` — a live run owns that PR, and two routines must
    never converge the same branch. Only a parent whose issue is
@@ -91,7 +94,9 @@ report attempts to merge, push to the default branch, access secrets, modify
    before reaching ready. When resuming an existing
    stacked child, never baseline the parent's current head on faith: read
    the newest authenticated `claude-stack-parent` or `claude-stack-base`
-   marker, and if the parent branch's current head is not already an ancestor
+   marker. A newest marker of `default` means the child already reconverged
+   on the default branch — skip stack-parent recovery entirely and resume it
+   as an ordinary default-based PR. Otherwise take the marker's SHA, and if the parent branch's current head is not already an ancestor
    of the child branch, fold it in first — but only for a normal advance,
    where the marker SHA is an ancestor of the parent's current head. Merge
    that advance into the child before recording the new head as the
