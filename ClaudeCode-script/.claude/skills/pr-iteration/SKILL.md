@@ -66,9 +66,14 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
    child would carry the abandoned parent's unmerged changes into the
    default branch, so a human must decide. If
    `baseRefOid` no longer matches the recorded parent head the evidence was
-   collected against, merge the parent's new head into the branch, set the
-   recorded parent head to that validated `baseRefOid`, and return to step 1 —
-   checks and reviews for the old merge result prove nothing.
+   collected against: when the recorded head is an ancestor of the new
+   `baseRefOid` (a normal advance), merge the parent's new head into the
+   branch, set the recorded parent head to that validated `baseRefOid`, and
+   return to step 1 — checks and reviews for the old merge result prove
+   nothing. When it is not an ancestor, the parent's history was rewritten
+   (rebased or force-pushed): never merge it — that would carry the
+   rewrite's dropped commits into the child — escalate for a human decision
+   instead.
 4. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
 5. For a loop-managed PR linked with `Closes #N`: for a stacked child, first
    comment exactly
