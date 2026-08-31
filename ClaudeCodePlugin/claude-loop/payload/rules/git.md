@@ -8,7 +8,9 @@
   conflict-free same-repository Claude PR as its base and identify it with
   `Stacked on #<parent-pr>` in the child PR body. Resolve the parent's feedback
   and conflicts before creating the child; never hide unresolved parent work
-  inside a stack.
+  inside a stack. Merge a stack bottom-up: never merge a child PR while its
+  parent PR is open — after the parent lands, the child is retargeted and
+  reconverged before it merges into the default branch.
 - Every PR description must contain:
   1. `Closes #<issue>` — the issue is the spec; link it.
   2. **What changed** — 3–6 bullets, plain language.

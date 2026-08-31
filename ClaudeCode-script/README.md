@@ -257,7 +257,10 @@ the repository for each cloud run to read.
 ## The human's two touchpoints
 
 1. Approve the plan (kickoff session).
-2. When the issue turns `claude-ready`: review the PR against the issue and merge.
+2. When the issue turns `claude-ready`: review the PR against the issue and
+   merge. Merge a stack bottom-up: land the parent PR first, let the child
+   retarget and reconverge, then merge the child. Never merge a child PR into
+   its still-open parent branch.
 
 ## Notes & tuning
 

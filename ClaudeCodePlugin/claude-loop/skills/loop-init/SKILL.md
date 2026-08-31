@@ -113,6 +113,13 @@ must add every exact context returned by `gh pr checks` and verify with:
 bash .claude/scripts/checks.sh --list-ci-checks
 ```
 
+Platforms this cloud host cannot verify (a banner-qualified `checks.sh`
+exit 42) must configure `EXPECTED_CI_CHECKS` — the deferral's verifier is
+push-triggered CI, and an empty list leaves it without one. For Xcode
+Cloud, set the workflow's Pull Request Changes start condition to target
+`main` plus `claude/*`: stacked child PRs target the parent's `claude/`
+branch and must still receive the platform check.
+
 ## 4. Activate hooks and seed the toolchain
 
 - Move the preflighted settings file into `.claude/settings.json`. It preserves
@@ -181,5 +188,7 @@ End with one self-contained walkthrough containing:
 
 When `.claude/rules` existed before the run, show `git diff --stat .claude` and
 summarize changes. Explicitly report changes to `ROUTINE_PROMPT.md`,
-`issue-to-pr/SKILL.md`, or `cloud-setup-swift.sh`, because account prompts or
-environment setup may require manual updates.
+`SWEEP_ROUTINE_PROMPT.md`, `issue-to-pr/SKILL.md`, or `cloud-setup-swift.sh`,
+because account prompts or environment setup may require manual updates. A
+changed `SWEEP_ROUTINE_PROMPT.md` means the account-level sweep routine must
+be replaced with the new prompt — stack-child recovery lives there.

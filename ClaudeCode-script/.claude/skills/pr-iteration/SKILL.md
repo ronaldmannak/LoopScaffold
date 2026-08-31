@@ -66,16 +66,19 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
    child would carry the abandoned parent's unmerged changes into the
    default branch, so a human must decide. If
    `baseRefOid` no longer matches the recorded parent head the evidence was
-   collected against, merge the parent's new head into the branch and return
-   to step 1 — checks and reviews for the old merge result prove nothing.
+   collected against, merge the parent's new head into the branch, set the
+   recorded parent head to that validated `baseRefOid`, and return to step 1 —
+   checks and reviews for the old merge result prove nothing.
 4. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
-5. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
-   with `claude-ready`, then verify the issue has exactly one state label and
-   that it is `claude-ready` (not `claude-running` or `claude-blocked`).
-   For a stacked child, also comment exactly
+5. For a loop-managed PR linked with `Closes #N`: for a stacked child, first
+   comment exactly
    `Ready with stack parent at <sha>. <!-- claude-stack-parent <sha> -->`
-   on the issue, where `<sha>` is the `baseRefOid` just validated; the
-   scheduled sweep compares it against the parent's current head.
+   on the issue, where `<sha>` is the `baseRefOid` just validated — the
+   scheduled sweep compares it against the parent's current head, and the
+   marker must exist before the label flips so an overlapping sweep never
+   sees a ready child without one. Then replace `claude-running`
+   with `claude-ready`, and verify the issue has exactly one state label and
+   that it is `claude-ready` (not `claude-running` or `claude-blocked`).
 
 ## Escalation (cap hit, repeated failure, or genuinely stuck)
 

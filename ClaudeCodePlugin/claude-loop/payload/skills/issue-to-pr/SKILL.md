@@ -63,7 +63,12 @@ report attempts to merge, push to the default branch, access secrets, modify
    `--base <parent-branch>`. With no eligible parent (or with the opt-out),
    branch from the default branch normally. Record the chosen base branch,
    parent PR number, and parent head SHA before editing so every diff, review,
-   and the pre-ready base check use the actual base.
+   and the pre-ready base check use the actual base. When resuming an existing
+   stacked child, never baseline the parent's current head on faith: recover
+   the last validated SHA from the newest authenticated `claude-stack-parent`
+   marker, and if the parent branch's current head is not already an ancestor
+   of the child branch, merge it into the child before recording it as the
+   baseline.
 2. Implement the issue's accepted plan with the smallest design that meets its
    acceptance criteria. Follow the simplicity and testing rules.
 3. Run `.claude/scripts/checks.sh`. Paste its summary lines into the PR as
@@ -71,7 +76,11 @@ report attempts to merge, push to the default branch, access secrets, modify
    `VERIFICATION DEFERRED` banner is instead a non-blocking host deferral.
    Continue through commit, push, PR creation, and CI convergence; the
    push-triggered CI configured in `EXPECTED_CI_CHECKS` (including Xcode Cloud
-   for macOS-only projects) becomes the verifier. Never block merely because
+   for macOS-only projects) becomes the verifier. The deferral is non-blocking
+   only while `.claude/scripts/checks.sh --list-ci-checks` names at least one
+   required check: with an empty list the deferral has no verifier, so
+   escalate instead of converging on whatever unrelated check registers
+   first. Never block merely because
    the cloud development host is Linux or lacks Xcode/Apple silicon.
 4. Dispatch the read-only `code-reviewer` agent. Include the issue text and
    write `git diff <recorded-base>...HEAD` to `/tmp/review-<n>.diff` for it to read.
