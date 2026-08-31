@@ -72,7 +72,11 @@ report attempts to merge, push to the default branch, access secrets, modify
    racing routines — and the settle delay lets a near-simultaneous rival's
    claim land before the deciding re-read. Two parallel child routines must
    never converge the same branch; a losing child treats that parent as
-   running and falls back, and a claim whose run dies is recovered by the
+   running and falls back — a dependent child parks by posting the
+   dependency-wait comment and replacing its own `claude-running` with
+   `claude-blocked`, ending with that as its only state label, while an
+   opportunistic child takes the next eligible parent or the default
+   branch — and a claim whose run dies is recovered by the
    dead-run sweep like any other `claude-running` issue.
    Only then use `pr-iteration` to
    triage all of that parent's
