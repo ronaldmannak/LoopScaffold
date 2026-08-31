@@ -84,8 +84,10 @@ report attempts to merge, push to the default branch, access secrets, modify
    never rewrite pushed history; the Bash guard blocks force pushes — then
    retarget its base to the default branch and reconverge checks and reviews
    for the new head. A child whose run has already ended is resumed for this
-   by the scheduled sweep relabeling its issue `claude-build`; standalone
-   installs without a sweeper relabel the issue manually.
+   by the scheduled sweep relabeling its issue `claude-build`. Installations
+   without that sweep — the standalone distribution, or a plugin setup that
+   declined the optional sweep routine — must relabel the child's issue
+   `claude-build` manually after its parent merges or advances.
 
 ## Converge the pull request
 

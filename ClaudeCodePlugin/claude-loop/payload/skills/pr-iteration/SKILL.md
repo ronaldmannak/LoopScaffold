@@ -61,7 +61,10 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 3. For a stacked child (PR base is not the default branch), re-read
    `gh pr view <pr> --json baseRefName,baseRefOid`. If the parent PR heading
    that base branch has merged, merge the default branch into the child,
-   retarget the PR's base to the default branch, and return to step 1. If
+   retarget the PR's base to the default branch, and return to step 1. If it
+   closed without merging, escalate instead of retargeting: a retargeted
+   child would carry the abandoned parent's unmerged changes into the
+   default branch, so a human must decide. If
    `baseRefOid` no longer matches the recorded parent head the evidence was
    collected against, merge the parent's new head into the branch and return
    to step 1 — checks and reviews for the old merge result prove nothing.
@@ -69,6 +72,10 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 5. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
    with `claude-ready`, then verify the issue has exactly one state label and
    that it is `claude-ready` (not `claude-running` or `claude-blocked`).
+   For a stacked child, also comment exactly
+   `Ready with stack parent at <sha>. <!-- claude-stack-parent <sha> -->`
+   on the issue, where `<sha>` is the `baseRefOid` just validated; the
+   scheduled sweep compares it against the parent's current head.
 
 ## Escalation (cap hit, repeated failure, or genuinely stuck)
 

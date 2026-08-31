@@ -169,7 +169,10 @@ End with one self-contained walkthrough containing:
    uses the 20-minute request and 60-minute human-intervention fallback.
 5. **Optional overnight sweep:** explain parallel labeling and `Depends-on:
    #N`; offer a second scheduled routine using the complete
-   `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md`.
+   `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md`. Warn that declining it also
+   declines stack-child recovery: after a stack parent merges or advances,
+   the child's issue must be relabeled `claude-build` by hand (a parent
+   closed unmerged needs a human decision instead).
 6. **Smoke test:** routine configuration lives in the Anthropic account. Paste
    updated prompts whenever `/loop-init` reports a change, then test one trivial
    labeled issue and read the full transcript.

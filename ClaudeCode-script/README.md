@@ -33,7 +33,10 @@ sent back for reconvergence — the plugin's scheduled sweeper relabels its
 issue `claude-build`; this standalone distribution has no sweeper, so relabel
 the child's issue manually — and the resumed run merges the default branch
 into the child (pushed history is never rewritten), retargets its PR to the
-default branch, and reconverges checks and reviews. Merging stays a human
+default branch, and reconverges checks and reviews. The same manual relabel
+applies when a still-open parent advances after the child is ready; a parent
+closed without merging needs a human decision instead, since retargeting the
+child would carry the parent's unmerged changes. Merging stays a human
 action.
 
 ## Install the scaffold
