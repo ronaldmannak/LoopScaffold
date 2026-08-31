@@ -27,8 +27,10 @@ fork-owned, failing, unreviewed, or conflicted PR is never used as a parent;
 with no eligible parent the routine branches from the default branch normally.
 
 Add the exact line `Stacking: disabled` to an issue to opt out and branch from
-the default branch. After a parent merges, the routine rebases the child onto
-the default branch, retargets its PR, and reconverges checks and reviews.
+the default branch; the opt-out also keeps a `Depends-on:` issue parked until
+its PR merges instead of stacking on it. After a parent merges, the routine
+merges the default branch into the child (pushed history is never rewritten),
+retargets its PR to the default branch, and reconverges checks and reviews.
 Merging stays a human action.
 
 ## Install the scaffold
@@ -208,7 +210,7 @@ Complete these project-specific steps after it finishes:
    | | GitHub Actions | Xcode Cloud | Both |
    |---|---|---|---|
    | Fits | SwiftPM / Linux-buildable repos | Xcode apps (signing, device tests) | Apple apps wanting fast lint + full fidelity |
-   | Setup | copy .claude/templates/ci-github-actions.yml → .github/workflows/ci.yml, pick variant | workflow start condition = "Pull Request Changes" targeting main | both of the left |
+   | Setup | copy .claude/templates/ci-github-actions.yml → .github/workflows/ci.yml, pick variant | workflow start condition = "Pull Request Changes" targeting main plus `claude/*` (stacked child PRs target the parent's `claude/` branch) | both of the left |
    | Oracle parity | CI runs the SAME checks.sh the routine runs locally — zero drift | sandbox can't run xcodebuild: configure checks.sh for lint/partial, evidence cites the check | Actions job = checks.sh, Xcode Cloud = build oracle |
    | Gotchas | macOS runners are slow/expensive | check appears in branch-protection dropdown only after reporting once; logs live in App Store Connect (diagnostician falls back to annotations) | put both exact context names in `EXPECTED_CI_CHECKS` inside checks.sh so an early Actions check cannot hide the later Xcode Cloud check |
    Then protect `main` (require PR + the chosen check(s) passing).

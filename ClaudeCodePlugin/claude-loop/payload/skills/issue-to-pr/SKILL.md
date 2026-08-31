@@ -32,8 +32,10 @@ report attempts to merge, push to the default branch, access secrets, modify
 ## Gate dependencies and claim ownership
 
 1. If the issue contains `Depends-on: #<x>` and an open, same-repository PR
-   closes that issue, use that PR as the stack parent instead of parking. If no
-   merged PR and no eligible open PR closes it, comment
+   closes that issue, use that PR as the stack parent instead of parking.
+   `Stacking: disabled` withdraws that option: the dependency then stays a
+   plain wait for #<x> to merge. If no merged PR closes #<x> and no stack
+   parent is usable, comment
    `Parked: waiting on #<x> to merge. <!-- claude-dependency-wait #<x> -->`,
    replace `claude-build` with `claude-blocked`, surface that terminal state,
    and stop. A scheduled sweep or human relabel resumes it after the dependency
@@ -77,8 +79,10 @@ report attempts to merge, push to the default branch, access secrets, modify
    `Closes #<n>`, follow `.claude/rules/git.md`, and include a separate
    `Test changes` section whenever an existing test changed. For a stack, set
    the parent branch as the PR base and add `Stacked on #<parent-pr>` to the
-   body. After the parent merges, rebase the child on the default branch,
-   retarget its base, and reconverge checks and reviews for the new head.
+   body. After the parent merges, merge the default branch into the child —
+   never rewrite pushed history; the Bash guard blocks force pushes — then
+   retarget its base to the default branch and reconverge checks and reviews
+   for the new head.
 
 ## Converge the pull request
 
