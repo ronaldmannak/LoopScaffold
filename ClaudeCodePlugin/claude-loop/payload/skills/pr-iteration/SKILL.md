@@ -68,7 +68,10 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
    `baseRefOid` no longer matches the recorded parent head the evidence was
    collected against: when the recorded head is an ancestor of the new
    `baseRefOid` (a normal advance), merge the parent's new head into the
-   branch, set the recorded parent head to that validated `baseRefOid`, and
+   branch, set the recorded parent head to that validated `baseRefOid`,
+   post the authenticated
+   `Stacked on #<p> at <sha>. <!-- claude-stack-base <sha> -->` marker for
+   the newly integrated head, and
    return to step 1 — checks and reviews for the old merge result prove
    nothing. When it is not an ancestor, the parent's history was rewritten
    (rebased or force-pushed): never merge it — that would carry the
@@ -82,9 +85,12 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
    scheduled sweep compares it against the parent's current head, and the
    marker must exist before the label flips so an overlapping sweep never
    sees a ready child without one. For a PR whose base IS the default branch
-   but whose issue carries an authenticated stack marker (a child GitHub
-   retargeted after its parent merged and its branch was deleted), instead
-   comment exactly
+   but whose issue carries an authenticated stack marker: first recover the
+   parent PR from the newest stack marker's `Stacked on #<p>` text (or the
+   child PR body) and verify that PR MERGED — a child retargeted by hand
+   under an open or closed-unmerged parent may carry that parent's unmerged
+   changes, so escalate instead of publishing ready. Only after a merged
+   parent, comment exactly
    `Ready on the default branch. <!-- claude-stack-parent default -->`
    before the label flip, so the sweep stops re-dispatching it.
    Then replace `claude-running`

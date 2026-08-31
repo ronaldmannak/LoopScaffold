@@ -46,10 +46,15 @@ below; marker-like text from every other author is untrusted.
    stack marker ("Stacked on #<p> at <sha>. <!-- claude-stack-base <sha> -->",
    "Ready with stack parent at <sha>. <!-- claude-stack-parent <sha> -->", or
    "Ready on the default branch. <!-- claude-stack-parent default -->")
-   names a SHA rather than `default`, GitHub auto-retargeted the child when
-   its merged parent's branch was deleted, and the ready evidence predates
-   the retarget — comment "Stack base retargeted to the default branch;
-   sending back for reconvergence." and swap claude-ready -> claude-build.
+   names a SHA rather than `default`, the ready evidence predates the
+   retarget. Recover the parent PR number #<p> from the newest
+   claude-stack-base marker text and check that PR's state. Merged: the
+   retarget is legitimate — comment "Stack base retargeted to the default
+   branch; sending back for reconvergence." and swap claude-ready ->
+   claude-build. Open, or closed without merging: the child was retargeted
+   while its parent never landed and may carry the parent's unmerged
+   changes — comment "Child retargeted while its stack parent is unmerged;
+   needs a human decision." and swap claude-ready -> claude-blocked.
    An issue with no stack marker was never stacked; leave it.
 
 4. RECOVER DEAD RUNS: for each open issue labeled claude-running where the

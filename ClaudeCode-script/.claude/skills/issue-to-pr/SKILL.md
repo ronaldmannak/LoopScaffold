@@ -58,9 +58,16 @@ report attempts to merge, push to the default branch, access secrets, modify
    issue depends on as the parent; only an issue with no `Depends-on:`
    directive may instead take the newest eligible open Claude PR. A declared
    dependency without a usable PR parks at the dependency gate — never
-   substitute an unrelated parent. Before branching, use `pr-iteration` to
+   substitute an unrelated parent. Before touching the parent, claim it:
+   replace `claude-ready` with `claude-running` on the parent issue, comment
+   `Converging as stack parent of #<child>. <!-- claude-stack-claim #<child> -->`,
+   then re-read the issue and proceed only if your claim is the newest —
+   two parallel child routines must never converge the same branch; when
+   another child claimed first, treat that parent as running and fall back.
+   Only then use `pr-iteration` to
    triage all of that parent's
-   review comments and resolve any merge conflict. Do not stack on a draft,
+   review comments and resolve any merge conflict; its completion check
+   restores the parent's `claude-ready`. Do not stack on a draft,
    conflicted, unreviewed, failing, or fork-owned PR, nor on one whose issue
    is still `claude-running` — a live run owns that PR, and two routines must
    never converge the same branch. Only a parent whose issue is
@@ -81,7 +88,9 @@ report attempts to merge, push to the default branch, access secrets, modify
    of the child branch, fold it in first — but only for a normal advance,
    where the marker SHA is an ancestor of the parent's current head. Merge
    that advance into the child before recording the new head as the
-   baseline. A parent whose current head does not descend from the marker
+   baseline, and immediately re-post the authenticated `claude-stack-base`
+   marker with that newly integrated head, so a run that dies later cannot
+   strand a stale baseline. A parent whose current head does not descend from the marker
    SHA was rewritten (rebased or force-pushed): never merge it — the merge
    would resurrect the commits the rewrite dropped — escalate for a human
    decision instead. With no marker at all, treat a non-ancestor parent head
