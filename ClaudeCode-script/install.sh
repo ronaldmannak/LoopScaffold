@@ -163,7 +163,9 @@ else
   echo "      CLEANCMD=(<clean-command> <arguments>)"
   echo "      EXPECTED_CI_CHECKS=()"
 fi
-echo "    add every required CI context to EXPECTED_CI_CHECKS only when more than one provider must report"
+echo "    add every required CI context to EXPECTED_CI_CHECKS when more than one provider must report,"
+echo "    or when this host cannot verify the project (checks.sh exit 42): a deferring project must"
+echo "    name its platform check (e.g. Xcode Cloud) there — that check is the only verifier"
 echo "    verify configured contexts: bash .claude/scripts/checks.sh --list-ci-checks"
 
 # Seed .swift-version for Swift repos (read at RUN TIME by the cloud
@@ -249,7 +251,11 @@ cat << 'EOD'
   4. CI choice (see README table):
      - Actions: done if you passed --with-actions-ci
      - Xcode Cloud: App Store Connect → workflow start condition =
-       "Pull Request Changes" targeting main
+       "Pull Request Changes" targeting the default branch and claude/*
+       (stacked child PRs target the parent's claude/ branch), and put
+       the exact check
+       name in EXPECTED_CI_CHECKS when this host cannot verify the
+       project (checks.sh exit 42)
      - Multiple CI providers: put every exact required context name in
        EXPECTED_CI_CHECKS inside .claude/scripts/checks.sh
   5. Inspect existing branch/ruleset protection without changing it. If this

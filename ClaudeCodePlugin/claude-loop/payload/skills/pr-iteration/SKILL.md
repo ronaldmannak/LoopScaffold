@@ -26,7 +26,7 @@ Waiting is done with BLOCKING commands, which cost no tokens and wake the instan
    - External reviewers (Codex etc.): apply this protocol independently for every head SHA. A submitted review for the current head completes the external-review gate. On the exact `@codex review` request for this head, a 👀 reaction from `chatgpt-codex-connector[bot]` means only "accepted/in progress"; a 👍 from that bot means "completed with no findings" and passes the gate.
      1. If neither completed signal exists 20 minutes after the CURRENT head was pushed, post a PR comment containing exactly `@codex review`. ONCE per head SHA — never repeat for the same head.
      2. Stay subscribed. If 60 minutes pass after that request without either a Codex-bot 👍 or a submitted review, escalate for human intervention: report the head SHA, CI state, request time, and missing review signal on the PR and linked issue, then replace `claude-running` with `claude-blocked`. Do not proceed on internal review alone.
-     Do not count 👀, your own request comment, or reactions from other actors as completed review. Never reply to the request comment. A new push resets both deadlines.
+     Do not count 👀, your own request comment, or reactions from other actors as completed review. Never reply to the request comment. A new push — or a base retarget, which counts as a new head for the once-per-head request limit — resets both deadlines.
    - Guard the watch: if the environment kills long-blocking calls, fall back to `sleep 120` + `gh pr checks` in a loop, still capped by this skill's iteration limits.
 
 4. The PR description contains evidence per `.claude/rules/git.md`.
@@ -58,9 +58,56 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 
 1. Re-read the head SHA: `gh pr view <pr> --json headRefOid --jq .headRefOid`.
 2. If it differs from the $HEAD_SHA your status snapshot used, discard the snapshot and return to step 1 — green checks for a stale commit prove nothing.
-3. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
-4. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
-   with `claude-ready`, then verify the issue has exactly one state label and
+3. For a stacked child (PR base is not the default branch), re-read
+   `gh pr view <pr> --json baseRefName,baseRefOid`. If the parent PR heading
+   that base branch has merged, merge the default branch into the child,
+   retarget the PR's base to the default branch, and return to step 1. If it
+   closed without merging, escalate instead of retargeting: a retargeted
+   child would carry the abandoned parent's unmerged changes into the
+   default branch, so a human must decide. If
+   `baseRefOid` no longer matches the recorded parent head the evidence was
+   collected against: when the recorded head is an ancestor of the new
+   `baseRefOid` (a normal advance), merge the parent's new head into the
+   branch, set the recorded parent head to that validated `baseRefOid`,
+   post the authenticated
+   `Stacked on #<p> at <sha>. <!-- claude-stack-base <sha> -->` marker for
+   the newly integrated head, and
+   return to step 1 — checks and reviews for the old merge result prove
+   nothing. When it is not an ancestor, the parent's history was rewritten
+   (rebased or force-pushed): never merge it — that would carry the
+   rewrite's dropped commits into the child — escalate for a human decision
+   instead.
+4. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
+5. For a loop-managed PR linked with `Closes #N`: for a stacked child, first
+   comment exactly
+   `Ready with stack parent at <sha>. <!-- claude-stack-parent <sha> -->`
+   on the issue, where `<sha>` is the `baseRefOid` just validated — the
+   scheduled sweep compares it against the parent's current head, and the
+   marker must exist before the label flips so an overlapping sweep never
+   sees a ready child without one. For a PR whose base IS the default branch
+   but whose issue carries an authenticated stack marker: first recover the
+   parent PR from the newest stack marker's `Stacked on #<p>` text (or the
+   child PR body) and verify that PR MERGED — a child retargeted by hand
+   under an open or closed-unmerged parent may carry that parent's unmerged
+   changes, so escalate instead of publishing ready. Also require the
+   recorded baseline (the newest authenticated stack marker's SHA) to be an
+   ancestor of the merged parent PR's final head: a parent rewritten after
+   that baseline and then merged leaves the rewrite's dropped commits in
+   the child, so escalate instead of merging on. After a merged parent,
+   the retarget itself invalidates the snapshot: merge the default branch
+   into the child if it is not already contained, and return to step 1.
+   Evidence must postdate the retarget even when that merge is a no-op and
+   the head is unchanged — re-run the required checks and apply the
+   external-review protocol again (the retarget reset the request limit,
+   so one fresh `@codex review` for this head-and-base pair is allowed),
+   accepting only results
+   completed after the base changed; results collected while the base was
+   the parent branch prove nothing for the retargeted diff. Only then
+   comment exactly
+   `Ready on the default branch. <!-- claude-stack-parent default -->`
+   before the label flip, so the sweep stops re-dispatching it.
+   Then replace `claude-running`
+   with `claude-ready`, and verify the issue has exactly one state label and
    that it is `claude-ready` (not `claude-running` or `claude-blocked`).
 
 ## Escalation (cap hit, repeated failure, or genuinely stuck)

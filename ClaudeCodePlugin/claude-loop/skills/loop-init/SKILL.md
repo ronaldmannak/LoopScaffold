@@ -113,6 +113,15 @@ must add every exact context returned by `gh pr checks` and verify with:
 bash .claude/scripts/checks.sh --list-ci-checks
 ```
 
+Platforms this cloud host cannot verify (a banner-qualified `checks.sh`
+exit 42) must configure `EXPECTED_CI_CHECKS` — the deferral's verifier is
+push-triggered CI, and an empty list leaves it without one. For Xcode
+Cloud, resolve the repository's default branch
+(`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`) and set
+the workflow's Pull Request Changes start condition to target that branch
+plus `claude/*`: stacked child PRs target the parent's `claude/` branch and
+must still receive the platform check.
+
 ## 4. Activate hooks and seed the toolchain
 
 - Move the preflighted settings file into `.claude/settings.json`. It preserves
@@ -169,7 +178,10 @@ End with one self-contained walkthrough containing:
    uses the 20-minute request and 60-minute human-intervention fallback.
 5. **Optional overnight sweep:** explain parallel labeling and `Depends-on:
    #N`; offer a second scheduled routine using the complete
-   `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md`.
+   `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md`. Warn that declining it also
+   declines stack-child recovery: after a stack parent merges or advances,
+   the child's issue must be relabeled `claude-build` by hand (a parent
+   closed unmerged needs a human decision instead).
 6. **Smoke test:** routine configuration lives in the Anthropic account. Paste
    updated prompts whenever `/loop-init` reports a change, then test one trivial
    labeled issue and read the full transcript.
@@ -178,5 +190,7 @@ End with one self-contained walkthrough containing:
 
 When `.claude/rules` existed before the run, show `git diff --stat .claude` and
 summarize changes. Explicitly report changes to `ROUTINE_PROMPT.md`,
-`issue-to-pr/SKILL.md`, or `cloud-setup-swift.sh`, because account prompts or
-environment setup may require manual updates.
+`SWEEP_ROUTINE_PROMPT.md`, `issue-to-pr/SKILL.md`, or `cloud-setup-swift.sh`,
+because account prompts or environment setup may require manual updates. A
+changed `SWEEP_ROUTINE_PROMPT.md` means the account-level sweep routine must
+be replaced with the new prompt — stack-child recovery lives there.

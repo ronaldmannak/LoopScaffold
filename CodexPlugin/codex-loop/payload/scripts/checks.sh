@@ -38,7 +38,10 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # failure. Keep it cheap and local, for example:
 #   PLATFORM_CAN_VERIFY=(bash -c '[[ "$(uname -s)" == Darwin ]] && xcodebuild -version')
 #
-# EXPECTED_CI_CHECKS may stay empty with one CI provider. When multiple
+# EXPECTED_CI_CHECKS may stay empty with one CI provider, EXCEPT when
+# PLATFORM_CAN_VERIFY defers on the development host (exit 42): a deferring
+# project must name its platform check (e.g. Xcode Cloud) here, because that
+# push-triggered check is the only verifier. When multiple
 # providers are required, add every exact name returned by `gh pr checks`:
 #   EXPECTED_CI_CHECKS=("CI / verify" "Xcode Cloud")
 # Verify the list with: bash .codex/scripts/checks.sh --list-ci-checks

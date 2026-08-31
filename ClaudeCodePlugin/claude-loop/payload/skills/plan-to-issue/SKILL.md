@@ -24,12 +24,17 @@ The approved plan, step by step. Exact file paths where known.
 ## Acceptance criteria
 - [ ] Deterministic, checkable criteria only (tests that must pass,
       observable behaviors, commands whose output must contain X)
-- [ ] All checks in .claude/scripts/checks.sh pass
+- [ ] All checks in .claude/scripts/checks.sh pass (a banner-qualified
+      exit 42 host deferral satisfies this once the configured platform CI
+      passes on the PR's current head)
 
 ## Dependencies
-If this plan requires another claude-build issue to merge first, add a line
-"Depends-on: #<n>" to the body — the routine parks dependent issues until
-the dependency merges, so you can safely file and label a whole batch at once.
+If this plan builds on another claude-build issue, add a line
+"Depends-on: #<n>" to the body. By default the routine stacks the dependent
+issue on #<n>'s open PR (or parks it until #<n> merges when no eligible PR
+exists), so you can safely file and label a whole batch at once. Add the
+exact line "Stacking: disabled" when the work must stay strictly serialized:
+the issue then parks until #<n> merges and branches from the default branch.
 
 ## Out of scope
 Explicit non-goals, so the implementer doesn't expand scope.

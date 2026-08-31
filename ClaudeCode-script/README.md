@@ -16,6 +16,29 @@ Do not use the standalone script and Claude plugin in the same target
 repository. They manage the same `.claude/` files; choose one method and use it
 for subsequent updates.
 
+## Stacked PRs
+
+Stacked PRs are the default. The routine branches each new issue from the open
+PR of its `Depends-on:` issue when one exists, or otherwise from the newest
+eligible open same-repository Claude PR, after triaging that parent's review
+comments and resolving any merge conflict. The child PR uses the parent branch
+as its base and records `Stacked on #<parent-pr>` in its body. A draft,
+fork-owned, failing, unreviewed, or conflicted PR is never used as a parent;
+with no eligible parent the routine branches from the default branch normally.
+
+Add the exact line `Stacking: disabled` to an issue to opt out and branch from
+the default branch; the opt-out also keeps a `Depends-on:` issue parked until
+its PR merges instead of stacking on it. After a parent merges, the child is
+sent back for reconvergence — the plugin's scheduled sweeper relabels its
+issue `claude-build`; this standalone distribution has no sweeper, so relabel
+the child's issue manually — and the resumed run merges the default branch
+into the child (pushed history is never rewritten), retargets its PR to the
+default branch, and reconverges checks and reviews. The same manual relabel
+applies when a still-open parent advances after the child is ready; a parent
+closed without merging needs a human decision instead, since retargeting the
+child would carry the parent's unmerged changes. Merging stays a human
+action.
+
 ## Install the scaffold
 
 Prerequisites are Git, Bash, Python 3, and a target GitHub repository. Install
@@ -193,7 +216,7 @@ Complete these project-specific steps after it finishes:
    | | GitHub Actions | Xcode Cloud | Both |
    |---|---|---|---|
    | Fits | SwiftPM / Linux-buildable repos | Xcode apps (signing, device tests) | Apple apps wanting fast lint + full fidelity |
-   | Setup | copy .claude/templates/ci-github-actions.yml → .github/workflows/ci.yml, pick variant | workflow start condition = "Pull Request Changes" targeting main | both of the left |
+   | Setup | copy .claude/templates/ci-github-actions.yml → .github/workflows/ci.yml, pick variant | workflow start condition = "Pull Request Changes" targeting the repository's default branch plus `claude/*` (stacked child PRs target the parent's `claude/` branch) | both of the left |
    | Oracle parity | CI runs the SAME checks.sh the routine runs locally — zero drift | sandbox can't run xcodebuild: configure checks.sh for lint/partial, evidence cites the check | Actions job = checks.sh, Xcode Cloud = build oracle |
    | Gotchas | macOS runners are slow/expensive | check appears in branch-protection dropdown only after reporting once; logs live in App Store Connect (diagnostician falls back to annotations) | put both exact context names in `EXPECTED_CI_CHECKS` inside checks.sh so an early Actions check cannot hide the later Xcode Cloud check |
    Then protect `main` (require PR + the chosen check(s) passing).
@@ -228,13 +251,16 @@ configured manually in your Anthropic account, while the skill is committed in
 the repository for each cloud run to read.
 
 ```text
-/goal Process the GitHub issue that triggered this routine by reading and following `.claude/skills/issue-to-pr/SKILL.md`. Keep working until the transcript proves exactly one terminal state for that issue. READY means: the issue has only the `claude-ready` loop-state label; a `claude/issue-<n>-*` branch and ready-for-review PR containing `Closes #<n>` implement the accepted plan; `.claude/scripts/checks.sh` evidence and an internal code-reviewer PASS are visible; every required CI check is green for the PR's current head SHA; every review comment is triaged; a submitted external review or Codex-bot 👍 completes the external-review gate; and a next-up suggestion was posted when the backlog was nonempty. BLOCKED means: the issue has only the `claude-blocked` loop-state label and one escalation comment records the diagnosis, attempts with commit references, best hypothesis, and specific questions. Hitting a cap, an ambiguous requirement, a policy-only change, an external-review timeout, or another unresolvable blocker must end BLOCKED and satisfies this goal. Never end with `claude-running`, exceed three internal review cycles, eight CI iterations, twenty commits, or one escalation comment. Never merge, push to the default branch, modify loop policy files, or delete, skip, or weaken tests. Before each turn ends, surface the issue number, state label, branch, PR, current head SHA, checks and review evidence, or blocking evidence so the evaluator can judge this condition.
+/goal Process the GitHub issue that triggered this routine by reading and following `.claude/skills/issue-to-pr/SKILL.md`. Default to an eligible stacked PR unless the issue says `Stacking: disabled`; converge the parent before creating the child. A banner-qualified checks.sh exit 42 is a non-blocking host deferral: continue through push and use configured push-triggered CI, including Xcode Cloud, as the verifier. Keep working until the transcript proves exactly one terminal state for that issue. READY means: the issue has only the `claude-ready` loop-state label; a `claude/issue-<n>-*` branch and ready-for-review PR containing `Closes #<n>` implement the accepted plan; `.claude/scripts/checks.sh` evidence and an internal code-reviewer PASS are visible; every required CI check is green for the PR's current head SHA; every review comment is triaged; a submitted external review or Codex-bot 👍 completes the external-review gate; and a next-up suggestion was posted when the backlog was nonempty. BLOCKED means: the issue has only the `claude-blocked` loop-state label and one escalation comment records the diagnosis, attempts with commit references, best hypothesis, and specific questions. Hitting a cap, an ambiguous requirement, a policy-only change, an external-review timeout, or another unresolvable blocker must end BLOCKED and satisfies this goal. Never end with `claude-running`, exceed three internal review cycles, eight CI iterations, twenty commits, or one escalation comment. Never merge, push to the default branch, modify loop policy files, or delete, skip, or weaken tests. Before each turn ends, surface the issue number, state label, branch, PR, current head SHA, checks and review evidence, or blocking evidence so the evaluator can judge this condition.
 ```
 
 ## The human's two touchpoints
 
 1. Approve the plan (kickoff session).
-2. When the issue turns `claude-ready`: review the PR against the issue and merge.
+2. When the issue turns `claude-ready`: review the PR against the issue and
+   merge. Merge a stack bottom-up: land the parent PR first, let the child
+   retarget and reconverge, then merge the child. Never merge a child PR into
+   its still-open parent branch.
 
 ## Notes & tuning
 
@@ -269,8 +295,9 @@ the repository for each cloud run to read.
 - **External CI (Xcode Cloud etc.):** no GitHub workflow needed — Xcode Cloud
   reports status checks to the PR that `gh pr checks --watch` and branch
   protection consume directly. Requirements: the Xcode Cloud workflow's start
-  condition must be "Pull Request Changes" targeting your default branch (so
-  claude/* PRs build), the check must be marked required in branch protection
+  condition must be "Pull Request Changes" targeting your default branch plus
+  `claude/*` (so PRs from claude/* branches AND stacked child PRs based on a
+  claude/* parent branch both build), the check must be marked required in branch protection
   (it only appears in the dropdown after it has reported at least once), and
   checks.sh should be configured for what the Linux sandbox CAN run (lint /
   swift build), with the verification skill stating that build+test evidence
