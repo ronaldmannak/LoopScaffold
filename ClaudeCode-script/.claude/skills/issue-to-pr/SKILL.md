@@ -59,11 +59,18 @@ report attempts to merge, push to the default branch, access secrets, modify
    directive may instead take the newest eligible open Claude PR. A declared
    dependency without a usable PR parks at the dependency gate — never
    substitute an unrelated parent. Before touching the parent, claim it:
-   replace `claude-ready` with `claude-running` on the parent issue, comment
+   confirm the parent issue still shows `claude-ready`, comment
    `Converging as stack parent of #<child>. <!-- claude-stack-claim #<child> -->`,
-   then re-read the issue and proceed only if your claim is the newest —
-   two parallel child routines must never converge the same branch; when
-   another child claimed first, treat that parent as running and fall back.
+   replace `claude-ready` with `claude-running`, wait at least one minute,
+   then re-read the issue. Proceed only when yours is the OLDEST
+   `claude-stack-claim` posted since the parent last became `claude-ready`:
+   the oldest visible claim wins, so a claimant that sees an earlier claim
+   always defers — a point-in-time newest-wins check cannot serialize two
+   racing routines — and the settle delay lets a near-simultaneous rival's
+   claim land before the deciding re-read. Two parallel child routines must
+   never converge the same branch; a losing child treats that parent as
+   running and falls back, and a claim whose run dies is recovered by the
+   dead-run sweep like any other `claude-running` issue.
    Only then use `pr-iteration` to
    triage all of that parent's
    review comments and resolve any merge conflict; its completion check
