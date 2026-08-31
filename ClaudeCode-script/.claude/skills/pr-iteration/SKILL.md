@@ -26,7 +26,7 @@ Waiting is done with BLOCKING commands, which cost no tokens and wake the instan
    - External reviewers (Codex etc.): apply this protocol independently for every head SHA. A submitted review for the current head completes the external-review gate. On the exact `@codex review` request for this head, a 👀 reaction from `chatgpt-codex-connector[bot]` means only "accepted/in progress"; a 👍 from that bot means "completed with no findings" and passes the gate.
      1. If neither completed signal exists 20 minutes after the CURRENT head was pushed, post a PR comment containing exactly `@codex review`. ONCE per head SHA — never repeat for the same head.
      2. Stay subscribed. If 60 minutes pass after that request without either a Codex-bot 👍 or a submitted review, escalate for human intervention: report the head SHA, CI state, request time, and missing review signal on the PR and linked issue, then replace `claude-running` with `claude-blocked`. Do not proceed on internal review alone.
-     Do not count 👀, your own request comment, or reactions from other actors as completed review. Never reply to the request comment. A new push resets both deadlines.
+     Do not count 👀, your own request comment, or reactions from other actors as completed review. Never reply to the request comment. A new push — or a base retarget, which counts as a new head for the once-per-head request limit — resets both deadlines.
    - Guard the watch: if the environment kills long-blocking calls, fall back to `sleep 120` + `gh pr checks` in a loop, still capped by this skill's iteration limits.
 
 4. The PR description contains evidence per `.claude/rules/git.md`.
@@ -89,12 +89,18 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
    parent PR from the newest stack marker's `Stacked on #<p>` text (or the
    child PR body) and verify that PR MERGED — a child retargeted by hand
    under an open or closed-unmerged parent may carry that parent's unmerged
-   changes, so escalate instead of publishing ready. After a merged parent,
+   changes, so escalate instead of publishing ready. Also require the
+   recorded baseline (the newest authenticated stack marker's SHA) to be an
+   ancestor of the merged parent PR's final head: a parent rewritten after
+   that baseline and then merged leaves the rewrite's dropped commits in
+   the child, so escalate instead of merging on. After a merged parent,
    the retarget itself invalidates the snapshot: merge the default branch
    into the child if it is not already contained, and return to step 1.
    Evidence must postdate the retarget even when that merge is a no-op and
    the head is unchanged — re-run the required checks and apply the
-   external-review protocol for this head again, accepting only results
+   external-review protocol again (the retarget reset the request limit,
+   so one fresh `@codex review` for this head-and-base pair is allowed),
+   accepting only results
    completed after the base changed; results collected while the base was
    the parent branch prove nothing for the retargeted diff. Only then
    comment exactly
