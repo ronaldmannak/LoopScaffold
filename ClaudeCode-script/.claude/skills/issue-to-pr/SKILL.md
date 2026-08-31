@@ -31,11 +31,24 @@ report attempts to merge, push to the default branch, access secrets, modify
 
 ## Gate dependencies and claim ownership
 
+<<<<<<< ours
+<<<<<<< ours
 1. Parse only full-line `Depends-on: #<x>` and `Stacks-on: #<x>` directives.
    More than one dependency directive, both directive kinds, a malformed
    directive, or a self-reference is ambiguous: escalate to `claude-blocked`.
 2. If the issue contains `Depends-on: #<x>` and no merged PR closes that issue,
    comment `Parked: waiting on #<x> to merge. <!-- claude-dependency-wait #<x> -->`,
+=======
+=======
+>>>>>>> theirs
+1. If the issue contains `Depends-on: #<x>` and an open, same-repository PR
+   closes that issue, use that PR as the stack parent instead of parking. If no
+   merged PR and no eligible open PR closes it, comment
+   `Parked: waiting on #<x> to merge. <!-- claude-dependency-wait #<x> -->`,
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
    replace `claude-build` with `claude-blocked`, surface that terminal state,
    and stop. A scheduled sweep or human relabel resumes it after the dependency
    merges.
@@ -61,17 +74,44 @@ report attempts to merge, push to the default branch, access secrets, modify
 
 ## Implement and verify
 
+<<<<<<< ours
+<<<<<<< ours
 1. Work only on `claude/issue-<n>-<slug>`; never on the default branch. For a
    new stacked child, fetch and branch from the recorded parent remote head,
    not from `main`. When resuming a stacked child, re-read the parent PR and
    verify its branch is still the child's PR base and its current head is an
    ancestor of the child branch. If the stack diverged, stop and request a
    human **Rebase Stack** action; never rewrite sibling branches or force-push.
+=======
+=======
+>>>>>>> theirs
+1. Work only on `claude/issue-<n>-<slug>`; never on the default branch. Stacked
+   PRs are the default. Unless the issue contains the exact line
+   `Stacking: disabled`, choose the open, same-repository Claude PR that the
+   issue depends on, or otherwise the newest eligible open Claude PR, as the
+   parent. Before branching, use `pr-iteration` to triage all of that parent's
+   review comments and resolve any merge conflict. Do not stack on a draft,
+   conflicted, unreviewed, failing, or fork-owned PR.
+   Create the issue branch from the parent's current head and open its PR with
+   `--base <parent-branch>`. With no eligible parent (or with the opt-out),
+   branch from the default branch normally. Record the chosen base and parent
+   PR number before editing so every diff and review uses the actual base.
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 2. Implement the issue's accepted plan with the smallest design that meets its
    acceptance criteria. Follow the simplicity and testing rules.
 3. Run `.claude/scripts/checks.sh`. Paste its summary lines into the PR as
-   evidence. A failing or unconfigured script is not a pass.
+   evidence. A failing or unconfigured script is not a pass. Exit 42 with the
+   `VERIFICATION DEFERRED` banner is instead a non-blocking host deferral.
+   Continue through commit, push, PR creation, and CI convergence; the
+   push-triggered CI configured in `EXPECTED_CI_CHECKS` (including Xcode Cloud
+   for macOS-only projects) becomes the verifier. Never block merely because
+   the cloud development host is Linux or lacks Xcode/Apple silicon.
 4. Dispatch the read-only `code-reviewer` agent. Include the issue text and
+<<<<<<< ours
+<<<<<<< ours
    write `git diff origin/<pr-base>...HEAD` to `/tmp/review-<n>.diff` for it to
    read, where `<pr-base>` is the parent branch for a stacked child and the
    default branch otherwise. Fix blocking findings and repeat, up to three
@@ -88,6 +128,21 @@ report attempts to merge, push to the default branch, access secrets, modify
    `gh stack link <parent-pr-number> <child-pr-number>`, then use read-only PR
    and REST queries to verify the child's `baseRefName`, non-null `stack`
    metadata, and position immediately above its parent.
+=======
+=======
+>>>>>>> theirs
+   write `git diff <recorded-base>...HEAD` to `/tmp/review-<n>.diff` for it to read.
+   Fix blocking findings and repeat, up to three internal review cycles.
+5. Open one ready-for-review PR, never a draft. Its body must contain
+   `Closes #<n>`, follow `.claude/rules/git.md`, and include a separate
+   `Test changes` section whenever an existing test changed. For a stack, set
+   the parent branch as the PR base and add `Stacked on #<parent-pr>` to the
+   body. After the parent merges, rebase the child on the default branch,
+   retarget its base, and reconverge checks and reviews for the new head.
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 
 ## Converge the pull request
 
@@ -139,6 +194,13 @@ required, an external review times out, or a cap is reached. Post one issue
 comment containing the current state, diagnosis, attempted commit references,
 best hypothesis, and specific questions. Replace `claude-running` with
 `claude-blocked` and verify it is the only loop state label.
+
+A development host that cannot run platform-specific checks is not by itself
+an unresolvable blocker when push-triggered CI covers the required platform.
+Push the smallest testable implementation and let that CI provide build, test,
+and automated acceptance evidence. Escalate only when the required evidence
+cannot be automated in configured CI, or CI itself reaches a normal escalation
+condition.
 
 A clean escalation is a successful terminal outcome. Ending with
 `claude-running` or continuing past a cap is a failure.

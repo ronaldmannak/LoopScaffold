@@ -804,6 +804,33 @@ class CloudSetupTests(unittest.TestCase):
 
 
 class ReviewRegressionTests(unittest.TestCase):
+    def test_claude_defaults_to_a_converged_stack_with_an_explicit_opt_out(self) -> None:
+        skill = (
+            ROOT / "ClaudeCodePlugin/claude-loop/payload/skills/issue-to-pr/SKILL.md"
+        ).read_text()
+        rule = (ROOT / "ClaudeCodePlugin/claude-loop/payload/rules/git.md").read_text()
+
+        self.assertIn("Stacked\n   PRs are the default", skill)
+        self.assertIn("`Stacking: disabled`", skill)
+        self.assertIn("triage all of that parent's", skill)
+        self.assertIn("resolve any merge conflict", skill)
+        self.assertIn("`--base <parent-branch>`", skill)
+        self.assertIn("`Stacked on #<parent-pr>`", rule)
+
+    def test_claude_platform_deferral_continues_to_push_triggered_ci(self) -> None:
+        skill = (
+            ROOT / "ClaudeCodePlugin/claude-loop/payload/skills/issue-to-pr/SKILL.md"
+        ).read_text()
+        routine = (
+            ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md"
+        ).read_text()
+
+        self.assertIn("non-blocking host deferral", skill)
+        self.assertIn("Continue through commit, push, PR creation", skill)
+        self.assertIn("Never block merely because", skill)
+        self.assertIn("Xcode Cloud", skill)
+        self.assertIn("exit 42 is a non-blocking host deferral", routine)
+
     def test_marketplace_manifests_and_install_guides_match_plugin_sources(self) -> None:
         claude_marketplace = json.loads(
             (ROOT / ".claude-plugin/marketplace.json").read_text()
