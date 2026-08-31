@@ -41,27 +41,6 @@ hooks. They do not merge pull requests or change branch protection or repository
 rulesets. Configure CI and merge gates for each target repository before relying
 on an unattended loop.
 
-## Optional stacked pull requests
-
-LoopScaffold keeps ordinary PRs as the default. A planned issue may opt into
-GitHub's stacked-PR preview with one full-line directive:
-
-```text
-Stacks-on: #123
-```
-
-The lower issue must belong to the same agent loop and have a converged
-same-repository PR. The child is then branched from that PR, opened against its
-branch, and linked into the native GitHub stack. Use `Depends-on: #123` instead
-when the earlier change must land, deploy, or be observed separately.
-
-The loop may install GitHub's official
-[`github/gh-stack`](https://github.com/github/gh-stack) extension on demand,
-but it only uses numeric `gh stack link`. Stack merges and cascading rebases
-remain human actions because they can rewrite branches owned by other runs.
-After a lower base moves or GitHub rebases an upper layer, its previous CI and
-review evidence is invalidated and the loop reconverges the current state.
-
 ## Update an existing repository
 
 Do not delete `.claude/`, `.codex/`, `.agents/`, or the managed `AGENTS.md`

@@ -60,12 +60,6 @@ confirm that CI runs for pull requests and reports the exact checks the loop
 watches. The initializer does not create project CI, alter branch protection,
 or change repository rulesets.
 
-After updating to a release with stacked-PR support, a project opts in per
-dependent issue with a full-line `Stacks-on: #N`. Existing workflows are
-preserved, so merge the initializer's build, converge, and sweep workflow diffs
-before using that directive. See the packaged guide for its same-agent and
-human-rebase constraints.
-
 ## Update an existing repository
 
 Update in place; do not delete `.codex/`, `.agents/`, or the managed block in

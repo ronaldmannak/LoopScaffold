@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -22,6 +24,21 @@ GUARD_HOOKS = (
     ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/guard-bash.sh"),
     ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/guard-bash.sh"),
 )
+CHECKS_SCRIPTS = (
+    ("claude-standalone", ROOT / "ClaudeCode-script/.claude/scripts/checks.sh"),
+    ("claude-plugin", ROOT / "ClaudeCodePlugin/claude-loop/payload/scripts/checks.sh"),
+    ("codex", ROOT / "CodexPlugin/codex-loop/payload/scripts/checks.sh"),
+)
+
+
+def checks_script_with(source: Path, repo: Path, predicate: str) -> Path:
+    """Copy checks.sh into repo with PLATFORM_CAN_VERIFY set to predicate."""
+    script = repo / "checks.sh"
+    text = source.read_text()
+    replaced = text.replace("PLATFORM_CAN_VERIFY=()", f"PLATFORM_CAN_VERIFY=({predicate})", 1)
+    assert replaced != text, "PLATFORM_CAN_VERIFY declaration missing from checks.sh"
+    script.write_text(replaced)
+    return script
 
 
 def run(*arguments: str | Path, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -233,6 +250,221 @@ class ChecksScriptTests(unittest.TestCase):
                 self.assertIn("test: PASS", full.stdout)
                 self.assertIn("build: SKIPPED", quick.stdout)
                 self.assertIn("test: PASS", quick.stdout)
+
+    def test_unset_platform_predicate_is_the_default(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product):
+                self.assertIn("PLATFORM_CAN_VERIFY=()", source.read_text())
+
+    def test_platform_predicate_failure_defers_with_exit_42_and_runs_nothing(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                # A project that would otherwise build, so a 42 can only come from the gate.
+                (repo / "Package.swift").write_text("// local package\n")
+                script = checks_script_with(source, repo, "false")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertIn("VERIFICATION DEFERRED", result.stdout)
+                self.assertIn("NOT a pass", result.stdout)
+                self.assertNotIn("VERIFICATION COMPLETE", result.stdout)
+                self.assertFalse((repo / ".claude/.checks").exists())
+                self.assertFalse((repo / ".codex/.checks").exists())
+
+    def test_platform_predicate_defers_before_project_autodetection(self) -> None:
+        # An Xcode container exits 1 during autodetection; the gate must win, so a
+        # host that cannot verify is never reported as a project misconfiguration.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                (repo / "App.xcodeproj").mkdir()
+                script = checks_script_with(source, repo, "false")
+                result = subprocess.run(
+                    ["/bin/bash", str(script), "--quick"], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertNotIn("Xcode project detected", result.stderr)
+
+    def test_satisfied_platform_predicate_runs_the_configured_checks(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "true")
+                script.write_text(script.read_text().replace(
+                    "BUILD=(); TEST=(); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()",
+                    "BUILD=(); TEST=(true); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()",
+                    1,
+                ))
+                result = run("/bin/bash", script, cwd=repo)
+                self.assertIn("VERIFICATION COMPLETE", result.stdout)
+                self.assertIn("test: PASS", result.stdout)
+
+    def test_ci_check_listing_still_works_on_a_host_that_cannot_verify(self) -> None:
+        # pr-iteration reads the required CI context names from any host, including
+        # one that cannot build the project.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "false")
+                script.write_text(script.read_text().replace(
+                    "EXPECTED_CI_CHECKS=()", 'EXPECTED_CI_CHECKS=("CI / verify")', 1
+                ))
+                result = run("/bin/bash", script, "--list-ci-checks", cwd=repo)
+                self.assertEqual(["CI / verify"], result.stdout.splitlines())
+
+    def test_unexecutable_platform_predicate_is_a_misconfiguration_not_a_deferral(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "checks-sh-no-such-command")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(1, result.returncode)
+                self.assertIn("not executable", result.stderr)
+                self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
+
+    def test_overrunning_predicate_defers_and_is_never_a_pass(self) -> None:
+        # A predicate that outlives its budget has not established that this host
+        # can verify, so it must defer -- never fall through as a successful gate.
+        if not shutil.which("timeout"):
+            self.skipTest("no timeout binary on this host")
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "bash -c 'sleep 2; exit 0'")
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "1"
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True,
+                    capture_output=True, env=env, timeout=60,
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertIn("VERIFICATION DEFERRED", result.stdout)
+                self.assertNotIn("unknown project type", result.stderr)
+
+    def test_hanging_predicate_is_bounded_and_defers(self) -> None:
+        if not shutil.which("timeout"):
+            self.skipTest("no timeout binary on this host")
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "sleep 120")
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "1"
+                started = time.monotonic()
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True,
+                    capture_output=True, env=env, timeout=60,
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertLess(time.monotonic() - started, 40)
+
+    def test_predicate_that_ignores_sigterm_is_killed_and_leaves_no_orphan(self) -> None:
+        if not shutil.which("timeout"):
+            self.skipTest("no timeout binary on this host")
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, 'bash -c \'trap "" TERM; sleep 120\'')
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "1"
+                started = time.monotonic()
+                # capture_output also fails here if the predicate survives as an
+                # orphan holding the inherited pipes open.
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True,
+                    capture_output=True, env=env, timeout=60,
+                )
+                self.assertEqual(42, result.returncode)
+                # 1s budget + 10s kill grace, well inside the predicate's own 120s.
+                self.assertLess(time.monotonic() - started, 40)
+
+    def test_predicate_exiting_with_a_signal_status_still_defers(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            for status in (137, 143):
+                with self.subTest(product=product, status=status), tempfile.TemporaryDirectory() as directory:
+                    repo = Path(directory)
+                    run("git", "init", "-q", repo)
+                    script = checks_script_with(source, repo, f"bash -c 'exit {status}'")
+                    result = subprocess.run(
+                        ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                    )
+                    self.assertEqual(42, result.returncode)
+                    self.assertIn("VERIFICATION DEFERRED", result.stdout)
+
+    def test_predicate_exiting_with_timeouts_reserved_status_still_defers(self) -> None:
+        # timeout reports 124 for a kill, but a predicate may exit 124 on its own.
+        # Elapsed time, not the status, decides which happened.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "bash -c 'exit 124'")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertIn("VERIFICATION DEFERRED", result.stdout)
+                self.assertNotIn("did not finish within", result.stderr)
+
+    def test_predicate_exiting_with_timeouts_own_failure_status_still_defers(self) -> None:
+        # `timeout` returns 125 for its own failure, but a predicate may exit 125
+        # too. The predicate's reported status decides, so this is a deferral.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "bash -c 'exit 125'")
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True
+                )
+                self.assertEqual(42, result.returncode)
+                self.assertIn("VERIFICATION DEFERRED", result.stdout)
+
+    def test_fast_predicate_defers_regardless_of_wall_clock_boundaries(self) -> None:
+        # A whole-second elapsed measurement rounded a 0.2s predicate up to a full
+        # 1s budget when it straddled a clock boundary, reporting a false hang.
+        # Repeated so a boundary is crossed; the fix removes timing from the path.
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "bash -c 'sleep 0.2; exit 7'")
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "1"
+                for attempt in range(10):
+                    result = subprocess.run(
+                        ["/bin/bash", str(script)], cwd=repo, text=True,
+                        capture_output=True, env=env,
+                    )
+                    self.assertEqual(42, result.returncode, f"attempt {attempt}: {result.stderr}")
+
+    def test_invalid_platform_check_timeout_is_a_misconfiguration_not_a_deferral(self) -> None:
+        for product, source in CHECKS_SCRIPTS:
+            with self.subTest(product=product), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                run("git", "init", "-q", repo)
+                script = checks_script_with(source, repo, "false")
+                env = dict(os.environ)
+                env["PLATFORM_CHECK_TIMEOUT"] = "not-a-number"
+                result = subprocess.run(
+                    ["/bin/bash", str(script)], cwd=repo, text=True, capture_output=True, env=env
+                )
+                self.assertEqual(1, result.returncode)
+                self.assertIn("positive whole number", result.stderr)
+                self.assertNotIn("VERIFICATION DEFERRED", result.stdout)
+
 
 class PolicyHookTests(unittest.TestCase):
     def test_protect_hooks_fail_closed_on_malformed_input(self) -> None:
@@ -473,68 +705,6 @@ class PolicyHookTests(unittest.TestCase):
             self.assertEqual(0, push_option.returncode)
             non_test = invoke_hook(hook, {"tool_input": {"command": "rm Sources/Contest.swift"}})
             self.assertEqual(0, non_test.returncode)
-
-    def test_bash_guards_constrain_gh_stack_to_inspection_and_numeric_linking(self) -> None:
-        blocked = {
-            "gh stack merge 42": "PR stack merge",
-            "gh --repo owner/repo stack merge 42": "PR stack merge",
-            "/tmp/gh-stack merge 42": "PR stack merge",
-            "gh stack push": "unsupported mutating gh-stack",
-            "gh stack rebase": "unsupported mutating gh-stack",
-            "gh stack sync --prune": "unsupported mutating gh-stack",
-            "gh stack submit --open": "unsupported mutating gh-stack",
-            "gh stack modify": "unsupported mutating gh-stack",
-            "gh stack unstack 7": "unsupported mutating gh-stack",
-            "gh stack alias gs": "unsupported mutating gh-stack",
-            "gh stack link parent-branch child-branch": "unsupported mutating gh-stack",
-            "gh stack link 12 13 14": "unsupported mutating gh-stack",
-            "gh stack link --base=develop 12 13": "unsupported mutating gh-stack",
-            "gh stack view --web": "unsupported gh-stack inspection flags",
-            "gh extension exec stack merge 42": "uninspectable GitHub extension",
-            "gh alias set land 'stack merge 42'": "persisted GitHub alias",
-            "gh alias delete land": "persisted GitHub alias",
-            "gh alias import aliases.yml": "persisted GitHub alias",
-        }
-        safe = (
-            "gh stack --help",
-            "gh stack view",
-            "gh stack view --json",
-            "gh stack link 12 13",
-            "/tmp/gh-stack link 12 13",
-            "gh alias list",
-        )
-        for product, hook in GUARD_HOOKS:
-            for command, reason in blocked.items():
-                with self.subTest(product=product, blocked=command):
-                    result = invoke_hook(hook, {"tool_input": {"command": command}})
-                    self.assertEqual(2, result.returncode)
-                    self.assertIn(reason, result.stderr)
-            for command in safe:
-                with self.subTest(product=product, safe=command):
-                    result = invoke_hook(hook, {"tool_input": {"command": command}})
-                    self.assertEqual(0, result.returncode)
-
-    def test_bash_guards_block_persisted_github_alias_invocation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            binary = Path(directory) / "gh"
-            binary.write_text(
-                "#!/usr/bin/env bash\n"
-                "if [[ \"$1 $2\" == \"alias list\" ]]; then\n"
-                "  printf '%s\\n' 'land: stack merge 42'\n"
-                "fi\n"
-            )
-            binary.chmod(0o755)
-            env = dict(os.environ)
-            env["PATH"] = f"{directory}:{env['PATH']}"
-            for product, hook in GUARD_HOOKS:
-                with self.subTest(product=product):
-                    result = invoke_hook(
-                        hook,
-                        {"tool_input": {"command": "gh land"}},
-                        env=env,
-                    )
-                    self.assertEqual(2, result.returncode)
-                    self.assertIn("GitHub alias command", result.stderr)
 
     def test_bash_guards_block_opaque_nested_shell_commands(self) -> None:
         blocked = (
@@ -804,33 +974,6 @@ class CloudSetupTests(unittest.TestCase):
 
 
 class ReviewRegressionTests(unittest.TestCase):
-    def test_claude_defaults_to_a_converged_stack_with_an_explicit_opt_out(self) -> None:
-        skill = (
-            ROOT / "ClaudeCodePlugin/claude-loop/payload/skills/issue-to-pr/SKILL.md"
-        ).read_text()
-        rule = (ROOT / "ClaudeCodePlugin/claude-loop/payload/rules/git.md").read_text()
-
-        self.assertIn("Stacked\n   PRs are the default", skill)
-        self.assertIn("`Stacking: disabled`", skill)
-        self.assertIn("triage all of that parent's", skill)
-        self.assertIn("resolve any merge conflict", skill)
-        self.assertIn("`--base <parent-branch>`", skill)
-        self.assertIn("`Stacked on #<parent-pr>`", rule)
-
-    def test_claude_platform_deferral_continues_to_push_triggered_ci(self) -> None:
-        skill = (
-            ROOT / "ClaudeCodePlugin/claude-loop/payload/skills/issue-to-pr/SKILL.md"
-        ).read_text()
-        routine = (
-            ROOT / "ClaudeCodePlugin/claude-loop/payload/ROUTINE_PROMPT.md"
-        ).read_text()
-
-        self.assertIn("non-blocking host deferral", skill)
-        self.assertIn("Continue through commit, push, PR creation", skill)
-        self.assertIn("Never block merely because", skill)
-        self.assertIn("Xcode Cloud", skill)
-        self.assertIn("exit 42 is a non-blocking host deferral", routine)
-
     def test_marketplace_manifests_and_install_guides_match_plugin_sources(self) -> None:
         claude_marketplace = json.loads(
             (ROOT / ".claude-plugin/marketplace.json").read_text()
@@ -917,11 +1060,11 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("issue_number:", trigger)
         self.assertIn("expected_label:", trigger)
         self.assertIn("actions: write", sweep)
-        self.assertEqual(7, sweep.count("gh workflow run codex-build-trigger.yml"))
-        self.assertEqual(7, sweep.count("-f expected_label="))
-        self.assertEqual(7, sweep.count("-f mode="))
-        self.assertEqual(7, sweep.count("-f reason="))
-        self.assertEqual(6, sweep.count("--limit 1000"))
+        self.assertEqual(6, sweep.count("gh workflow run codex-build-trigger.yml"))
+        self.assertEqual(6, sweep.count("-f expected_label="))
+        self.assertEqual(6, sweep.count("-f mode="))
+        self.assertEqual(6, sweep.count("-f reason="))
+        self.assertEqual(4, sweep.count("--limit 1000"))
         self.assertNotIn("--add-label codex-build", sweep)
 
     def test_codex_build_and_convergence_tasks_use_distinct_modes(self) -> None:
@@ -1078,85 +1221,6 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("entire comment body exactly matches", claude)
         self.assertIn("most recent", claude)
         self.assertIn("claude-dependency-resumed #<x>", claude)
-
-    def test_stacked_prs_are_explicit_same_agent_opt_in(self) -> None:
-        plan_paths = (
-            "CodexPlugin/codex-loop/payload/skills/plan-to-issue/SKILL.md",
-            "ClaudeCodePlugin/claude-loop/payload/skills/plan-to-issue/SKILL.md",
-            "ClaudeCode-script/.claude/skills/plan-to-issue/SKILL.md",
-        )
-        for path in plan_paths:
-            with self.subTest(path=path):
-                plan = (ROOT / path).read_text()
-                self.assertIn("`Stacks-on: #<n>`", plan)
-                self.assertIn("Never add both directives", plan)
-                self.assertIn("deployment-ordered", plan)
-
-        claude_paths = (
-            "ClaudeCodePlugin/claude-loop/payload/skills/issue-to-pr/SKILL.md",
-            "ClaudeCode-script/.claude/skills/issue-to-pr/SKILL.md",
-        )
-        for path in claude_paths:
-            with self.subTest(path=path):
-                implementation = (ROOT / path).read_text()
-                self.assertIn("claude-stack-wait #<x>", implementation)
-                self.assertIn("only `claude-ready`", implementation)
-                self.assertIn("branch from the recorded parent remote head", implementation)
-                self.assertIn("gh stack link <parent-pr-number> <child-pr-number>", implementation)
-                self.assertIn("non-null `stack`", implementation)
-                self.assertIn("human **Rebase Stack**", implementation)
-
-        agents = (ROOT / "CodexPlugin/codex-loop/payload/AGENTS_LOOP.md").read_text()
-        self.assertIn("## Optional stacked PRs", agents)
-        self.assertIn("codex-stack-wait #N", agents)
-        self.assertIn("only `codex-ready`", agents)
-        self.assertIn("gh stack link <parent-pr> <child-pr>", agents)
-        self.assertIn("Both\n  arguments must be numeric PR numbers", agents)
-
-    def test_stack_children_unpark_and_changed_heads_reconverge(self) -> None:
-        build = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-build-trigger.yml").read_text()
-        converge = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-converge-trigger.yml").read_text()
-        sweep = (ROOT / "CodexPlugin/codex-loop/payload/workflows/codex-sweep.yml").read_text()
-        claude_sweep = (ROOT / "ClaudeCodePlugin/claude-loop/payload/SWEEP_ROUTINE_PROMPT.md").read_text()
-
-        self.assertIn("build:stack-ready", build)
-        self.assertIn("event:head-updated", build)
-        self.assertIn("types: [synchronize]", converge)
-        self.assertIn("REASON=head-updated", converge)
-        self.assertIn("Unpark children whose stack parent is ready", sweep)
-        self.assertIn("codex-stack-wait #[0-9]+", sweep)
-        self.assertIn("codex-stack-resumed #$DEP", sweep)
-        self.assertIn('PARENT_MARKER_HEAD" = "$PARENT_SHA', sweep)
-        self.assertIn('PARENT_MARKER_BASE" = "$PARENT_BASE_SHA', sweep)
-        self.assertIn('"chatgpt-codex-connector[bot]"', sweep)
-        self.assertIn('and (.mergeable == "MERGEABLE")', sweep)
-        self.assertIn("-f mode=build -f reason=stack-ready", sweep)
-        self.assertIn("--json mergeable,body,headRefOid,baseRefOid", sweep)
-        self.assertIn("Stack readiness marker or parent changed", sweep)
-        self.assertIn('[ -z "$MARKER_BASE" ]', sweep)
-        self.assertIn("only when #<x> has exactly one Claude loop-state label", claude_sweep)
-        self.assertIn("claude-stack-resumed #<x>", claude_sweep)
-        self.assertIn("That PR's current head", claude_sweep)
-        self.assertIn("must match #<x>'s most recent authenticated exact", claude_sweep)
-        self.assertIn("direct-base SHA must match", claude_sweep)
-        self.assertIn("claude-ready-head <head-sha> base <base-sha>", claude_sweep)
-        self.assertIn("Never perform a stack-wide rebase yourself", claude_sweep)
-
-    def test_pr_iteration_is_base_aware_and_records_ready_heads(self) -> None:
-        paths = (
-            ("codex", "CodexPlugin/codex-loop/payload/skills/pr-iteration/SKILL.md"),
-            ("claude-plugin", "ClaudeCodePlugin/claude-loop/payload/skills/pr-iteration/SKILL.md"),
-            ("claude-standalone", "ClaudeCode-script/.claude/skills/pr-iteration/SKILL.md"),
-        )
-        for product, path in paths:
-            with self.subTest(product=product):
-                iteration = (ROOT / path).read_text()
-                self.assertIn("`baseRefName`", iteration)
-                self.assertIn("`baseRefOid`", iteration)
-                self.assertIn("origin/$BASE_REF...HEAD", iteration)
-                self.assertNotIn("git log origin/main..HEAD", iteration)
-                self.assertIn("Ready at <head-sha> on base <base-sha>: <pr-url>", iteration)
-                self.assertIn("Only numeric `gh stack link`", iteration)
 
     def test_claude_dead_run_recovery_requires_stale_issue_activity(self) -> None:
         sweep = (ROOT / "ClaudeCodePlugin/claude-loop/payload/SWEEP_ROUTINE_PROMPT.md").read_text()
@@ -1379,6 +1443,37 @@ class InstallerTests(unittest.TestCase):
             self.assertIn('BUILD=(xcodebuild -project "PicoServer.xcodeproj"', result.stdout)
             self.assertIn("chmod +x .claude/scripts/*.sh", result.stdout)
             self.assertIn("bash .claude/scripts/checks.sh --quick", result.stdout)
+
+    def test_install_sanity_check_reports_a_deferral_separately_from_a_failure(self) -> None:
+        for rc, banner, expected, unexpected in (
+            (42, "VERIFICATION DEFERRED", "DEFERRED", "FAILED or unconfigured"),
+            (1, "", "FAILED or unconfigured", "DEFERRED"),
+            # A preserved script predating the contract may use 42 for an ordinary
+            # failure; without the banner it must stay a failure diagnosis.
+            (42, "", "FAILED or unconfigured", "DEFERRED"),
+        ):
+            with self.subTest(rc=rc, banner=bool(banner)), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory) / "repo"
+                repo.mkdir()
+                run("git", "init", "-q", repo)
+                # install.sh preserves an existing checks.sh, so this stands in for a
+                # project whose configured PLATFORM_CAN_VERIFY fails on this host.
+                checks = repo / ".claude/scripts/checks.sh"
+                checks.parent.mkdir(parents=True)
+                checks.write_text(f"#!/usr/bin/env bash\necho '{banner}'\nexit {rc}\n")
+                checks.chmod(0o755)
+                binary = repo / "bin"
+                binary.mkdir()
+                gh = binary / "gh"
+                gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+                gh.chmod(0o755)
+                env = dict(os.environ)
+                env["PATH"] = f"{binary}:{env['PATH']}"
+                result = run(
+                    "/bin/bash", ROOT / "ClaudeCode-script/install.sh", repo, cwd=ROOT, env=env
+                )
+                self.assertIn(expected, result.stdout)
+                self.assertNotIn(unexpected, result.stdout)
 
     def test_install_is_idempotent_and_preserves_settings_and_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

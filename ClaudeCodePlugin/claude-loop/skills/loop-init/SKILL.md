@@ -167,14 +167,9 @@ End with one self-contained walkthrough containing:
    `.claude/templates/cloud-setup-swift.sh` in a copyable block.
 4. **Review gate:** enable Codex code review and automatic reviews. The routine
    uses the 20-minute request and 60-minute human-intervention fallback.
-5. **Optional overnight sweep:** explain parallel labeling, wait-until-merged
-   `Depends-on: #N`, and merge-together `Stacks-on: #N`. The latter requires a
-   converged same-repository Claude PR and uses the official `github/gh-stack`
-   extension only to link numeric PRs; stack merge and cascading rebase remain
-   human actions. Offer a second scheduled routine using the complete
-   `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md`, and explain that this updated prompt is
-   required to auto-resume parked stack children and reconverge heads changed
-   by GitHub's Rebase Stack action.
+5. **Optional overnight sweep:** explain parallel labeling and `Depends-on:
+   #N`; offer a second scheduled routine using the complete
+   `"$PAYLOAD"/SWEEP_ROUTINE_PROMPT.md`.
 6. **Smoke test:** routine configuration lives in the Anthropic account. Paste
    updated prompts whenever `/loop-init` reports a change, then test one trivial
    labeled issue and read the full transcript.

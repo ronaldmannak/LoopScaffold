@@ -339,42 +339,6 @@ def gh_subcommand(start: int, end: int):
             return token, index
     return "", end
 
-def gh_alias_defined(subcommand: str) -> bool:
-    if not subcommand or subcommand == "alias":
-        return False
-    aliases = git_output(["gh"], "alias", "list")
-    return any(
-        line.split(":", 1)[0].strip() == subcommand
-        for line in aliases.splitlines()
-        if ":" in line
-    )
-
-def gh_stack_block_reason(words: list[str]) -> str:
-    if not words or words[0] != "stack":
-        return ""
-    if len(words) == 1 or words[1] == "help":
-        return ""
-    if words[1] == "--help":
-        return "" if len(words) == 2 else "unsupported gh-stack inspection flags"
-    if words[1] == "view":
-        return (
-            ""
-            if all(value in {"--help", "--json", "--short", "-s"} for value in words[2:])
-            else "unsupported gh-stack inspection flags"
-        )
-    if (
-        words[1] == "link"
-        and len(words) == 4
-        and all(re.fullmatch(r"[1-9][0-9]*", value) for value in words[2:])
-    ):
-        # The supported automation path creates and pushes an ordinary PR
-        # first, then links existing PR numbers. Branch arguments would let
-        # gh-stack push or create PRs outside the scaffold's normal checks.
-        return ""
-    if words[1] == "merge":
-        return "PR stack merge (human-only)"
-    return "unsupported mutating gh-stack command"
-
 def graphql_query_uses_shell_expansion(source: str) -> bool:
     """Return true when a query= shell word contains an expandable dollar."""
     query_prefixes = (
@@ -689,8 +653,6 @@ for index, token in enumerate(tokens):
                 block(reason)
     elif name == "gh":
         subcommand, subcommand_index = gh_subcommand(index, end)
-        if gh_alias_defined(subcommand):
-            block("GitHub alias command")
         if subcommand == "api" and gh_api_is_mutating(tokens[subcommand_index + 1:end], command):
             block("mutating gh api")
         words = positional_arguments(
@@ -700,18 +662,6 @@ for index, token in enumerate(tokens):
         )
         if len(words) >= 2 and words[0:2] == ["pr", "merge"]:
             block("PR merge (human-only)")
-        if len(words) >= 2 and words[0] == "alias" and words[1] != "list":
-            block("persisted GitHub alias")
-        if len(words) >= 2 and words[0:2] == ["extension", "exec"]:
-            block("uninspectable GitHub extension execution")
-        stack_reason = gh_stack_block_reason(tokens[subcommand_index:end])
-        if stack_reason:
-            block(stack_reason)
-    elif name == "gh-stack":
-        words = ["stack", *tokens[index + 1:end]]
-        stack_reason = gh_stack_block_reason(words)
-        if stack_reason:
-            block(stack_reason)
     elif name == "rm" and any(test_path(arg) for arg in tokens[index + 1:end]):
         block("deleting test files")
     elif name in {"bash", "dash", "ksh", "sh", "zsh"} and shell_uses_command_string(tokens[index + 1:end]):

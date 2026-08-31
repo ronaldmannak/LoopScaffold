@@ -24,42 +24,9 @@
   2. **What changed** — 3–6 bullets, plain language.
   3. **Evidence** — the actual commands run and their output (test results, build status). Paste output, don't assert success.
   4. **Not done on purpose** — anything in or near scope that was intentionally skipped, and why.
+- A PR may be opened on a `checks.sh` exit 42 (this host cannot verify), but the **Evidence** section must then say plainly that the script verified nothing on this host and that CI is the verifier. Never present a 42 as passing checks.
 - Circuit breaker: if the same CI check fails 3 consecutive times after your fixes, STOP pushing. Comment your diagnosis and attempts on both the PR and linked issue, replace codex-running with codex-blocked, verify the issue's terminal label, and only then end the run.
 - Never force-push over commits you did not create in the current run.
-
-## Optional stacked PRs
-
-- `Stacks-on: #N` is an explicit opt-in for one issue to build on the open PR
-  for issue #N. It is mutually exclusive with `Depends-on: #N`; multiple or
-  malformed dependency directives are ambiguous and must end `codex-blocked`.
-- Use a stack only when both issues belong to this Codex loop in the same
-  repository and it is safe for a human to merge them together. Work that
-  requires a deployment, observation period, or separate landing must use
-  `Depends-on:` instead.
-- If #N was already closed by a merged PR, continue as an ordinary PR from the
-  default branch. Otherwise require #N to have only `codex-ready` as its loop
-  state and exactly one open, non-draft, currently mergeable same-repository PR
-  from a `codex/` branch that closes #N. Its current head must match #N's
-  authenticated exact `codex-ready-head` marker. If it is not ready, replace
-  `codex-running` with
-  `codex-blocked`, comment exactly
-  `Parked: waiting on #N to become stack-ready. <!-- codex-stack-wait #N -->`,
-  and stop; the sweeper resumes it when the lower PR is ready.
-- For an unmerged stack parent, fetch its head branch and create the new issue
-  branch from that exact remote head, not from `main`. When resuming, verify the
-  parent head is an ancestor of the issue branch and the PR still targets the
-  parent branch; never repair a divergent stack by rewriting history.
-- Push and open the child as an ordinary ready-for-review PR with the required
-  description, using the parent branch as `--base`. Resolve both PR numbers,
-  install the official `github/gh-stack` extension once if `gh stack` is
-  unavailable, then run only `gh stack link <parent-pr> <child-pr>`. Both
-  arguments must be numeric PR numbers. Verify the child PR's `stack` metadata
-  through the read-only REST endpoint and verify its `baseRefName`.
-- Never run `gh stack merge`, `push`, `rebase`, `sync`, `submit`, `modify`,
-  `unstack`, `delete`, or `alias`. Lower-layer updates can require a human to
-  use GitHub's **Rebase Stack** action. A changed child head invalidates all
-  prior checks and reviews; reconverge it from the new head before restoring
-  `codex-ready`.
 
 # Simplicity rules
 
@@ -82,6 +49,7 @@ These rules apply to ALL code written in this repository, by any session, subage
 - Every behavior change needs at least one test that fails before the change and passes after it.
 - Tests assert observable behavior, not implementation details (no asserting on private state or call counts unless that IS the behavior).
 - Never report work as complete based on a successful edit alone. Run `.codex/scripts/checks.sh` and include its actual output as evidence.
+- Exit 42 from `.codex/scripts/checks.sh` means this host cannot verify the project at all (its `PLATFORM_CAN_VERIFY` predicate failed) — nothing was built, tested, or linted. Report that work as UNVERIFIED, paste the deferral output, and name CI as the verifier. A 42 is never a pass, never "checks passed", and never grounds for merging.
 - If a test is flaky (passes on retry with no code change), say so explicitly in the PR rather than re-running until green.
 
 ## Loop conventions
@@ -96,9 +64,6 @@ These rules apply to ALL code written in this repository, by any session, subage
   merged pull request before starting. Otherwise replace codex-running with
   codex-blocked and comment exactly `Parked: waiting on #N to merge. <!-- codex-dependency-wait #N -->`;
   the sweeper authenticates that bot-authored marker before resuming it.
-- If the issue body contains `Stacks-on: #N`, apply the optional stacked-PR
-  rules above; the sweeper authenticates the `codex-stack-wait` marker before
-  resuming a child whose lower PR becomes ready.
 - Terminal invariant: any task that converges or escalates ends with exactly
   one terminal state label: codex-ready or codex-blocked, never either one alongside
   codex-running. Split-architecture handoffs intentionally keep only

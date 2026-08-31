@@ -7,6 +7,8 @@
 #   --clean = tool-native clean first
 #   --list-ci-checks = print configured required CI context names and exit
 # Output: one summary line per step; full logs in .codex/.checks/.
+# Exit: 0 = all configured checks passed, 1 = a check failed or the script is
+#   misconfigured, 42 = this host cannot verify (see PLATFORM_CAN_VERIFY below).
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -29,6 +31,13 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 #   LINT=(swiftlint --strict)
 #   CLEANCMD=(xcodebuild -workspace "App.xcworkspace" -scheme "App" clean)
 #
+# PLATFORM_CAN_VERIFY stays empty unless this project can only be built on
+# specific hosts (SDK, toolchain, or architecture). When set, it is a command
+# that exits non-zero on a host that cannot build the project at all; checks.sh
+# then exits 42 (UNVERIFIED) instead of reporting a host limitation as a project
+# failure. Keep it cheap and local, for example:
+#   PLATFORM_CAN_VERIFY=(bash -c '[[ "$(uname -s)" == Darwin ]] && xcodebuild -version')
+#
 # EXPECTED_CI_CHECKS may stay empty with one CI provider. When multiple
 # providers are required, add every exact name returned by `gh pr checks`:
 #   EXPECTED_CI_CHECKS=("CI / verify" "Xcode Cloud")
@@ -36,6 +45,7 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # If execution is denied: chmod +x .codex/scripts/*.sh
 # ---------------------------------------------------------------
 BUILD=(); TEST=(); LINT=(); CLEANCMD=(); EXPECTED_CI_CHECKS=()
+PLATFORM_CAN_VERIFY=()
 
 QUICK=false; CLEAN=false; LIST_CI_CHECKS=false
 for a in "$@"; do
@@ -52,6 +62,47 @@ if $LIST_CI_CHECKS; then
   fi
   exit 0
 fi
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+[[ -z "$TIMEOUT_BIN" ]] && echo "note: no timeout binary found — steps run without a time limit" >&2
+PLATFORM_CHECK_TIMEOUT="${PLATFORM_CHECK_TIMEOUT:-60}"   # seconds for the platform gate
+PLATFORM_KILL_GRACE=10                                   # SIGKILL delay for a predicate that ignores SIGTERM
+
+# Platform gate: "this host cannot verify" is not the same answer as "the project
+# failed", and reporting it as a failure leaves a correct change with no way to
+# reach a terminal state. Exit 42 means UNVERIFIED — nothing was built, tested,
+# or linted. It is never a pass and never justifies merging; CI is the verifier.
+if [[ ${#PLATFORM_CAN_VERIFY[@]} -gt 0 ]]; then
+  if [[ ! "$PLATFORM_CHECK_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "checks.sh: PLATFORM_CHECK_TIMEOUT must be a positive whole number of seconds, got '$PLATFORM_CHECK_TIMEOUT'." >&2
+    exit 1
+  fi
+  if ! command -v "${PLATFORM_CAN_VERIFY[0]}" >/dev/null 2>&1; then
+    echo "checks.sh: PLATFORM_CAN_VERIFY is configured but '${PLATFORM_CAN_VERIFY[0]}' is not executable." >&2
+    exit 1
+  fi
+  # The predicate's own status is the whole answer: zero means this host can
+  # verify, any non-zero means it cannot. Nothing is inferred from how the run
+  # ended, so a predicate that exits 124, 125, 137 or 143 defers like any other
+  # non-zero, and a predicate killed for overrunning its budget defers too --
+  # a check that cannot answer in PLATFORM_CHECK_TIMEOUT has not established
+  # that this host can verify. --kill-after bounds a predicate ignoring SIGTERM;
+  # it is probed because not every timeout implementation accepts it.
+  platform_cmd=()
+  if [[ -n "$TIMEOUT_BIN" ]]; then
+    platform_cmd=("$TIMEOUT_BIN")
+    "$TIMEOUT_BIN" -k 1 1 true >/dev/null 2>&1 && platform_cmd+=(-k "$PLATFORM_KILL_GRACE")
+    platform_cmd+=("$PLATFORM_CHECK_TIMEOUT")
+  fi
+  platform_cmd+=("${PLATFORM_CAN_VERIFY[@]}")
+  platform_rc=0
+  "${platform_cmd[@]}" >/dev/null || platform_rc=$?
+  if [[ $platform_rc -ne 0 ]]; then
+    echo "VERIFICATION DEFERRED: this host cannot verify this project (PLATFORM_CAN_VERIFY exit $platform_rc)."
+    echo "Nothing was built, tested, or linted. This is NOT a pass — CI is the verifier for this change."
+    exit 42
+  fi
+fi
+
 LOG_DIR=".codex/.checks"; mkdir -p "$LOG_DIR"
 [[ -f "$LOG_DIR/.gitignore" ]] || echo "*" > "$LOG_DIR/.gitignore"   # never commit logs
 STEP_TIMEOUT="${STEP_TIMEOUT:-1200}"   # seconds per step
@@ -94,9 +145,6 @@ if [[ ${#BUILD[@]} -eq 0 && ${#TEST[@]} -eq 0 && ${#LINT[@]} -eq 0 ]]; then
   echo "checks.sh: no build, test, or lint command is configured." >&2
   exit 1
 fi
-
-TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
-[[ -z "$TIMEOUT_BIN" ]] && echo "note: no timeout binary found — steps run without a time limit" >&2
 
 SUMMARY=()
 run() {

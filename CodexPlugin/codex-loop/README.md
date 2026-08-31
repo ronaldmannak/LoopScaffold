@@ -34,18 +34,6 @@ reports the context the loop watches before labeling the first issue. The
 initializer verifies or asks for that confirmation; it does not create or
 overwrite the project's CI workflow.
 
-## Optional stacked PRs
-
-Add `Stacks-on: #N` as a full line in a Codex issue when it may safely build on
-and merge with #N. The lower issue must have a `codex-ready` same-repository PR.
-The task creates an ordinary child PR against that lower branch and links the
-numeric PRs through GitHub's official `gh-stack` extension. Use `Depends-on:`
-when the lower change must merge or deploy separately.
-
-Stack merges and cascading rebases are human-only. If a lower layer changes,
-use GitHub's **Rebase Stack** action; the resulting child-head update wakes
-Codex to reconverge CI and reviews.
-
 ## Install
 
 From a terminal, add the LoopScaffold marketplace and install the plugin:
@@ -84,11 +72,6 @@ repository-specific CI names and task prompts. The initializer shows their
 differences for you to merge manually. Run `/hooks` and re-trust the hook hash
 after every scaffold update. Project CI, branch protection, and repository
 rulesets remain developer-managed.
-
-To use `Stacks-on:` in an updated repository, merge the initializer's changes
-for all three Codex workflows: the build trigger accepts stack-ready and
-head-update wakes, the converge trigger observes PR head synchronization, and
-the sweeper unparks children whose lower PR becomes ready.
 
 Labels codex-* and branches codex/* — designed to coexist with
 claude-loop in the same repository for side-by-side agent comparison.

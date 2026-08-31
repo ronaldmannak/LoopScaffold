@@ -36,17 +36,7 @@ Waiting is done with BLOCKING commands, which cost no tokens and wake the instan
 Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or on the same check failing 3 times in a row, stop and escalate (see below).
 
 1. **Snapshot state against the current head:**
-   - Read `headRefOid`, `baseRefOid`, `baseRefName`, and `headRefName` together
-     with `gh pr view`. Record `HEAD_SHA`, `BASE_SHA`, and `BASE_REF`, then
-     fetch both remote branches. All diffs and commit counts use
-     `origin/$BASE_REF...HEAD`, never a hard-coded `origin/main`.
-   - For an actively stacked `Stacks-on:` PR, verify the read-only REST `stack`
-     object is present, the direct base is the lower PR's head branch, and the
-     current lower head is an ancestor of the child. If the lower issue is now
-     closed by a merged PR, use the child's current retargeted base as an
-     ordinary layer; native stack metadata may remain. Otherwise a missing or
-     divergent stack requires a human **Rebase Stack** action and a blocked
-     issue; never run a cascading rebase or force-push siblings.
+   - `HEAD_SHA=$(gh pr view <pr> --json headRefOid --jq .headRefOid)` — record it.
    - `gh pr checks <pr>` (interactive sessions may use `--watch`; routines poll with sleep, don't spin).
      Checks count only if they are COMPLETED (not queued/in-progress) and apply to $HEAD_SHA.
    - `gh pr view <pr> --comments` and `gh api repos/{owner}/{repo}/pulls/<pr>/comments` for review threads.
@@ -69,11 +59,7 @@ Track an iteration counter. **Hard cap: 8 iterations.** On hitting the cap, or o
 1. Re-read the head SHA: `gh pr view <pr> --json headRefOid --jq .headRefOid`.
 2. If it differs from the $HEAD_SHA your status snapshot used, discard the snapshot and return to step 1 — green checks for a stale commit prove nothing.
 3. Require: at least one check exists, and all REQUIRED checks completed successfully for the current head SHA, and the review-thread triage was performed against the current code. An empty check list fails this gate.
-4. Resolve the linked issue and PR URL. Before changing labels, ensure the
-   issue has an authenticated exact comment
-   `Ready at <head-sha> on base <base-sha>: <pr-url>. <!-- claude-ready-head <head-sha> base <base-sha> -->`;
-   post it once when absent. If the comment fails, do not mark the issue ready.
-5. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
+4. For a loop-managed PR linked with `Closes #N`, replace `claude-running`
    with `claude-ready`, then verify the issue has exactly one state label and
    that it is `claude-ready` (not `claude-running` or `claude-blocked`).
 
@@ -84,8 +70,5 @@ Post ONE comment on the PR containing: what fails, your diagnosis, what you trie
 ## Never
 
 - Never merge, never push to main.
-- Never run stack-wide mutation commands. Only numeric `gh stack link` is
-  permitted during initial PR creation; merging and cascading rebases are
-  human actions.
 - Never respond to CI runs triggered by your own just-pushed commit as if they were new external feedback — wait for the run to finish, act once.
 - Never disable, skip, or `continue-on-error` a CI check to get green.
