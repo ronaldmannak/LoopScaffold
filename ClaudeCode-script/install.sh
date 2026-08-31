@@ -251,8 +251,9 @@ cat << 'EOD'
   4. CI choice (see README table):
      - Actions: done if you passed --with-actions-ci
      - Xcode Cloud: App Store Connect → workflow start condition =
-       "Pull Request Changes" targeting main and claude/* (stacked child
-       PRs target the parent's claude/ branch), and put the exact check
+       "Pull Request Changes" targeting the default branch and claude/*
+       (stacked child PRs target the parent's claude/ branch), and put
+       the exact check
        name in EXPECTED_CI_CHECKS when this host cannot verify the
        project (checks.sh exit 42)
      - Multiple CI providers: put every exact required context name in

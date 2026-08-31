@@ -116,9 +116,11 @@ bash .claude/scripts/checks.sh --list-ci-checks
 Platforms this cloud host cannot verify (a banner-qualified `checks.sh`
 exit 42) must configure `EXPECTED_CI_CHECKS` — the deferral's verifier is
 push-triggered CI, and an empty list leaves it without one. For Xcode
-Cloud, set the workflow's Pull Request Changes start condition to target
-`main` plus `claude/*`: stacked child PRs target the parent's `claude/`
-branch and must still receive the platform check.
+Cloud, resolve the repository's default branch
+(`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`) and set
+the workflow's Pull Request Changes start condition to target that branch
+plus `claude/*`: stacked child PRs target the parent's `claude/` branch and
+must still receive the platform check.
 
 ## 4. Activate hooks and seed the toolchain
 
